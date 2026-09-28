@@ -25,12 +25,12 @@ impl Collection {
         &self,
         atom: Atom<'_>,
         _value: Value<'_>,
-        _is_data: bool,
+        is_data: bool,
     ) -> Result<ExoticDefineResult> {
-        Ok(if atom.to_string()? == "0" {
-            ExoticDefineResult::Handled(false)
-        } else {
-            ExoticDefineResult::Fallthrough
+        Ok(match atom.to_string()?.as_str() {
+            "0" => ExoticDefineResult::Handled(false),
+            "indexed" => ExoticDefineResult::Handled(is_data),
+            _ => ExoticDefineResult::Fallthrough,
         })
     }
 
@@ -162,6 +162,9 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
         )?);
         assert!(ctx.eval::<bool, _>(
             "Reflect.defineProperty(collection, 'ordinary', { value: 9 }) && collection.ordinary === 9 && !Reflect.defineProperty(collection, '0', { value: 7 }) && collection[0] === 42"
+        )?);
+        assert!(ctx.eval::<bool, _>(
+            "!Reflect.defineProperty(collection, 'indexed', {}) && !Reflect.defineProperty(collection, 'indexed', { get() {} }) && Reflect.defineProperty(collection, 'indexed', { writable: true })"
         )?);
         assert!(ctx.eval::<bool, _>("custom.custom === 7")?);
         Ok(())

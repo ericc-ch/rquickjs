@@ -149,8 +149,9 @@ pub(crate) unsafe extern "C" fn exotic_define_own_property(
     let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
-    let is_data =
-        flags & (qjs::JS_PROP_HAS_GET as qjs::c_int | qjs::JS_PROP_HAS_SET as qjs::c_int) == 0;
+    let is_data = flags
+        & (qjs::JS_PROP_HAS_VALUE as qjs::c_int | qjs::JS_PROP_HAS_WRITABLE as qjs::c_int)
+        != 0;
     (ptr.as_ref().v_table.define_own_property)(ptr, ctx, atom, value, is_data)
 }
 
