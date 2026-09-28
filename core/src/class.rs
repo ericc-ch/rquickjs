@@ -36,6 +36,67 @@ pub enum ClassKind {
     Exotic,
 }
 
+/// Which QuickJS exotic callbacks a class installs. Callbacks that are absent
+/// leave property lookup and assignment to QuickJS's ordinary object behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct ExoticHooks {
+    /// Intercept all property reads, including inherited properties.
+    pub get: bool,
+    /// Intercept all property writes.
+    pub set: bool,
+    /// Intercept property deletion.
+    pub delete: bool,
+    /// Intercept definitions of computed own properties.
+    pub define_own_property: bool,
+    /// Intercept membership tests, including inherited properties.
+    pub has: bool,
+    /// Provide computed own property descriptors.
+    pub get_own_property: bool,
+    /// Provide computed own property names.
+    pub get_own_property_names: bool,
+}
+
+impl ExoticHooks {
+    /// Preserve the behavior of manually implemented exotic classes.
+    pub const ALL: Self = Self {
+        get: true,
+        set: true,
+        delete: true,
+        define_own_property: true,
+        has: true,
+        get_own_property: true,
+        get_own_property_names: true,
+    };
+}
+
+/// The outcome of an exotic property setter. `Fallthrough` leaves ordinary
+/// assignment, including prototype setters, to the JavaScript engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExoticSetResult {
+    /// The exotic setter processed the assignment and returned its success state.
+    Handled(bool),
+    /// The exotic setter did not handle this property.
+    Fallthrough,
+    /// The exotic setter ignores this computed property when the receiver is
+    /// another object; continue searching at the holder's prototype.
+    FallthroughSkippingOwnProperty,
+}
+
+impl From<bool> for ExoticSetResult {
+    fn from(value: bool) -> Self {
+        Self::Handled(value)
+    }
+}
+
+/// Outcome of an exotic own-property definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExoticDefineResult {
+    /// The class handled the definition, with this success state.
+    Handled(bool),
+    /// Continue with QuickJS's ordinary property definition.
+    Fallthrough,
+}
+
 /// A JavaScript property descriptor returned from [`JsClass::exotic_get_own_property`].
 pub struct PropertyDescriptor<'js> {
     /// The property value (for data descriptors).
@@ -91,6 +152,10 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
     /// The kind of this class (plain, callable, or exotic).
     const KIND: ClassKind = ClassKind::Plain;
 
+    /// Callbacks installed for this exotic class. Derived classes set this to
+    /// the hooks declared in their `#[rquickjs::exotic]` implementation.
+    const EXOTIC_HOOKS: ExoticHooks = ExoticHooks::ALL;
+
     /// Can the type be mutated while a JavaScript value.
     ///
     /// This should either be [`Readable`] or [`Writable`].
@@ -127,11 +192,12 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
+        _object: Value<'js>,
         _receiver: Value<'js>,
         _value: Value<'js>,
-    ) -> Result<bool> {
+    ) -> Result<ExoticSetResult> {
         let _ = this;
-        Ok(false)
+        Ok(ExoticSetResult::Handled(false))
     }
 
     /// The function which will be called if a delete property is performed on an object with this class
@@ -139,9 +205,23 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
+        _object: Value<'js>,
     ) -> Result<bool> {
         let _ = this;
         Ok(false)
+    }
+
+    /// Called when QuickJS creates an own property on an exotic object.
+    /// `is_data` is false when the descriptor has a getter or setter.
+    fn exotic_define_own_property(
+        this: &JsCell<'js, Self>,
+        _ctx: &Ctx<'js>,
+        _atom: Atom<'js>,
+        _value: Value<'js>,
+        _is_data: bool,
+    ) -> Result<ExoticDefineResult> {
+        let _ = this;
+        Ok(ExoticDefineResult::Fallthrough)
     }
 
     /// The function which will be called if has property or similar is called on an object with this class
@@ -161,6 +241,7 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
+        _object: Value<'js>,
     ) -> Result<Option<PropertyDescriptor<'js>>> {
         let _ = this;
         Ok(None)
@@ -172,6 +253,7 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
     fn exotic_get_own_property_names(
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
+        _object: Value<'js>,
     ) -> Result<Vec<PropertyName<'js>>> {
         let _ = this;
         Ok(Vec::new())
@@ -458,7 +540,9 @@ unsafe fn class_id<'js, C: JsClass<'js>>(ctx: &Ctx<'js>) -> Result<qjs::JSClassI
     match C::KIND {
         ClassKind::Plain => Ok(ctx.get_opaque().get_class_id()),
         ClassKind::Callable => Ok(ctx.get_opaque().get_callable_id()),
-        ClassKind::Exotic => Ok(ctx.get_opaque().get_exotic_id()),
+        ClassKind::Exotic => ctx
+            .get_opaque()
+            .get_or_register_exotic::<C>(qjs::JS_GetRuntime(ctx.as_ptr())),
     }
 }
 
@@ -471,7 +555,7 @@ mod test {
     };
 
     use crate::{
-        class::{ClassKind, JsClass, Readable, Trace, Tracer, Writable},
+        class::{ClassKind, ExoticSetResult, JsClass, Readable, Trace, Tracer, Writable},
         function::This,
         test_with,
         value::Constructor,
@@ -997,9 +1081,10 @@ mod test {
                 this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
                 atom: crate::Atom<'js>,
+                _object: crate::Value<'js>,
                 _receiver: crate::Value<'js>,
                 _value: crate::Value<'js>,
-            ) -> crate::Result<bool> {
+            ) -> crate::Result<ExoticSetResult> {
                 let _ = this;
                 if atom.to_string()? == "i" {
                     let Some(new_i) = _value.as_int() else {
@@ -1008,7 +1093,7 @@ mod test {
                         return Err(ctx.throw(err_val));
                     };
                     this.borrow_mut().i = new_i;
-                    return Ok(true);
+                    return Ok(ExoticSetResult::Handled(true));
                 }
                 let err_val =
                     crate::String::from_str(ctx.clone(), "Properties are read-only")?.into_value();
@@ -1031,6 +1116,7 @@ mod test {
                 _this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
                 _atom: crate::Atom<'js>,
+                _object: crate::Value<'js>,
             ) -> crate::Result<bool> {
                 let err_val = crate::String::from_str(ctx.clone(), "Properties cannot be deleted")?
                     .into_value();
@@ -1041,6 +1127,7 @@ mod test {
                 this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
                 atom: crate::Atom<'js>,
+                _object: crate::Value<'js>,
             ) -> crate::Result<Option<super::PropertyDescriptor<'js>>> {
                 let name = atom.to_string()?;
                 if name == "hello" || name == "i" {
@@ -1060,6 +1147,7 @@ mod test {
             fn exotic_get_own_property_names(
                 _this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
+                _object: crate::Value<'js>,
             ) -> crate::Result<Vec<super::PropertyName<'js>>> {
                 Ok(vec![
                     super::PropertyName {

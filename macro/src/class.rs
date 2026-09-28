@@ -362,7 +362,11 @@ impl Class {
         let props = self.expand_props(&crate_name);
         let reexpand = self.reexpand();
         let exotic_const = if self.config().exotic {
-            quote! { const KIND: #crate_name::class::ClassKind = #crate_name::class::ClassKind::Exotic; }
+            let exotic_module = format_ident!("__impl_exotic_{}__", self.ident());
+            quote! {
+                const KIND: #crate_name::class::ClassKind = #crate_name::class::ClassKind::Exotic;
+                const EXOTIC_HOOKS: #crate_name::class::ExoticHooks = #exotic_module::ExoticImpl::HOOKS;
+            }
         } else {
             TokenStream::new()
         };
@@ -383,18 +387,30 @@ impl Class {
                     this: &#crate_name::class::JsCell<'js, Self>,
                     ctx: &#crate_name::Ctx<'js>,
                     atom: #crate_name::Atom<'js>,
+                    object: #crate_name::Value<'js>,
                     receiver: #crate_name::Value<'js>,
                     value: #crate_name::Value<'js>,
-                ) -> #crate_name::Result<bool> {
-                    #exotic_module::ExoticImpl::exotic_set_property(this, ctx, atom, receiver, value)
+                ) -> #crate_name::Result<#crate_name::class::ExoticSetResult> {
+                    #exotic_module::ExoticImpl::exotic_set_property(this, ctx, atom, object, receiver, value)
                 }
 
                 fn exotic_delete_property(
                     this: &#crate_name::class::JsCell<'js, Self>,
                     ctx: &#crate_name::Ctx<'js>,
                     atom: #crate_name::Atom<'js>,
+                    object: #crate_name::Value<'js>,
                 ) -> #crate_name::Result<bool> {
-                    #exotic_module::ExoticImpl::exotic_delete_property(this, ctx, atom)
+                    #exotic_module::ExoticImpl::exotic_delete_property(this, ctx, atom, object)
+                }
+
+                fn exotic_define_own_property(
+                    this: &#crate_name::class::JsCell<'js, Self>,
+                    ctx: &#crate_name::Ctx<'js>,
+                    atom: #crate_name::Atom<'js>,
+                    value: #crate_name::Value<'js>,
+                    is_data: bool,
+                ) -> #crate_name::Result<#crate_name::class::ExoticDefineResult> {
+                    #exotic_module::ExoticImpl::exotic_define_own_property(this, ctx, atom, value, is_data)
                 }
 
                 fn exotic_has_property(
@@ -409,15 +425,17 @@ impl Class {
                     this: &#crate_name::class::JsCell<'js, Self>,
                     ctx: &#crate_name::Ctx<'js>,
                     atom: #crate_name::Atom<'js>,
+                    object: #crate_name::Value<'js>,
                 ) -> #crate_name::Result<Option<#crate_name::class::PropertyDescriptor<'js>>> {
-                    #exotic_module::ExoticImpl::exotic_get_own_property(this, ctx, atom)
+                    #exotic_module::ExoticImpl::exotic_get_own_property(this, ctx, atom, object)
                 }
 
                 fn exotic_get_own_property_names(
                     this: &#crate_name::class::JsCell<'js, Self>,
                     ctx: &#crate_name::Ctx<'js>,
+                    object: #crate_name::Value<'js>,
                 ) -> #crate_name::Result<Vec<#crate_name::class::PropertyName<'js>>> {
-                    #exotic_module::ExoticImpl::exotic_get_own_property_names(this, ctx)
+                    #exotic_module::ExoticImpl::exotic_get_own_property_names(this, ctx, object)
                 }
             }
         } else {

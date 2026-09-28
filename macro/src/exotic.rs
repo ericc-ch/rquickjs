@@ -20,6 +20,7 @@ enum ExoticMethodKind {
     Delete,
     Has,
     GetOwnProperty,
+    DefineOwnProperty,
     GetOwnPropertyNames,
 }
 
@@ -31,6 +32,7 @@ impl ExoticMethodKind {
             Self::Delete => "exotic_delete_property",
             Self::Has => "exotic_has_property",
             Self::GetOwnProperty => "exotic_get_own_property",
+            Self::DefineOwnProperty => "exotic_define_own_property",
             Self::GetOwnPropertyNames => "exotic_get_own_property_names",
         }
     }
@@ -47,6 +49,7 @@ enum ExoticMethodOption {
     Delete(FlagOption<kw::delete>),
     Has(FlagOption<kw::has>),
     GetOwnProperty(FlagOption<kw::get_own_property>),
+    DefineOwnProperty(FlagOption<kw::define_own_property>),
     GetOwnPropertyNames(FlagOption<kw::get_own_property_names>),
 }
 
@@ -54,6 +57,8 @@ impl Parse for ExoticMethodOption {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         if input.peek(kw::get_own_property_names) {
             input.parse().map(Self::GetOwnPropertyNames)
+        } else if input.peek(kw::define_own_property) {
+            input.parse().map(Self::DefineOwnProperty)
         } else if input.peek(kw::get_own_property) {
             input.parse().map(Self::GetOwnProperty)
         } else if input.peek(kw::get) {
@@ -67,7 +72,7 @@ impl Parse for ExoticMethodOption {
         } else {
             Err(syn::Error::new(
                 input.span(),
-                "invalid exotic method attribute, expected one of: get, set, delete, has, get_own_property, get_own_property_names",
+                "invalid exotic method attribute, expected one of: get, set, delete, has, get_own_property, define_own_property, get_own_property_names",
             ))
         }
     }
@@ -82,6 +87,9 @@ impl ExoticMethodConfig {
             ExoticMethodOption::Has(x) if x.is_true() => (ExoticMethodKind::Has, "has"),
             ExoticMethodOption::GetOwnProperty(x) if x.is_true() => {
                 (ExoticMethodKind::GetOwnProperty, "get_own_property")
+            }
+            ExoticMethodOption::DefineOwnProperty(x) if x.is_true() => {
+                (ExoticMethodKind::DefineOwnProperty, "define_own_property")
             }
             ExoticMethodOption::GetOwnPropertyNames(x) if x.is_true() => (
                 ExoticMethodKind::GetOwnPropertyNames,
@@ -102,6 +110,7 @@ impl ExoticMethodConfig {
                         ExoticMethodKind::Delete => "delete",
                         ExoticMethodKind::Has => "has",
                         ExoticMethodKind::GetOwnProperty => "get_own_property",
+                        ExoticMethodKind::DefineOwnProperty => "define_own_property",
                         ExoticMethodKind::GetOwnPropertyNames => "get_own_property_names",
                     }
                 ),
@@ -248,11 +257,61 @@ impl ExoticMethod {
                 (params, args, quote! { #crate_name::Value<'js> }, conversion)
             }
             ExoticMethodKind::Set => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, _receiver: #crate_name::Value<'js>, value: #crate_name::Value<'js> };
-                let args = if self.has_ctx {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, object: #crate_name::Value<'js>, receiver: #crate_name::Value<'js>, value: #crate_name::Value<'js> };
+                let with_receiver =
+                    self.function.params.params.len() > if self.has_ctx { 4 } else { 3 };
+                let args = if with_receiver && self.has_ctx {
+                    quote! { ctx, atom, object, receiver, value }
+                } else if with_receiver {
+                    quote! { atom, object, receiver, value }
+                } else if self.has_ctx {
                     quote! { ctx, atom, value }
                 } else {
                     quote! { atom, value }
+                };
+                let conversion = if self.returns_result {
+                    quote! { result.map(#crate_name::class::ExoticSetResult::from) }
+                } else {
+                    quote! { Ok(#crate_name::class::ExoticSetResult::from(result)) }
+                };
+                (
+                    params,
+                    args,
+                    quote! { #crate_name::class::ExoticSetResult },
+                    conversion,
+                )
+            }
+            ExoticMethodKind::DefineOwnProperty => {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, value: #crate_name::Value<'js>, is_data: bool };
+                let args = if self.has_ctx {
+                    quote! { ctx, atom, value, is_data }
+                } else {
+                    quote! { atom, value, is_data }
+                };
+                let conversion = if self.returns_result {
+                    quote! { result }
+                } else {
+                    quote! { Ok(result) }
+                };
+                (
+                    params,
+                    args,
+                    quote! { #crate_name::class::ExoticDefineResult },
+                    conversion,
+                )
+            }
+            ExoticMethodKind::Delete => {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, object: #crate_name::Value<'js> };
+                let has_object = self.kind == ExoticMethodKind::Delete
+                    && self.sig.inputs.len() > if self.has_ctx { 3 } else { 2 };
+                let args = if self.has_ctx && has_object {
+                    quote! { ctx, atom, object }
+                } else if has_object {
+                    quote! { atom, object }
+                } else if self.has_ctx {
+                    quote! { ctx, atom }
+                } else {
+                    quote! { atom }
                 };
                 let conversion = if self.returns_result {
                     quote! { result }
@@ -261,7 +320,7 @@ impl ExoticMethod {
                 };
                 (params, args, quote! { bool }, conversion)
             }
-            ExoticMethodKind::Delete | ExoticMethodKind::Has => {
+            ExoticMethodKind::Has => {
                 let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js> };
                 let args = if self.has_ctx {
                     quote! { ctx, atom }
@@ -276,8 +335,13 @@ impl ExoticMethod {
                 (params, args, quote! { bool }, conversion)
             }
             ExoticMethodKind::GetOwnProperty => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js> };
-                let args = if self.has_ctx {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, object: #crate_name::Value<'js> };
+                let has_object = self.sig.inputs.len() > if self.has_ctx { 3 } else { 2 };
+                let args = if self.has_ctx && has_object {
+                    quote! { ctx, atom, object }
+                } else if has_object {
+                    quote! { atom, object }
+                } else if self.has_ctx {
                     quote! { ctx, atom }
                 } else {
                     quote! { atom }
@@ -295,8 +359,14 @@ impl ExoticMethod {
                 )
             }
             ExoticMethodKind::GetOwnPropertyNames => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js> };
-                let args = if self.has_ctx {
+                let params =
+                    quote! { ctx: &#crate_name::Ctx<'js>, object: #crate_name::Value<'js> };
+                let has_object = self.sig.inputs.len() > if self.has_ctx { 2 } else { 1 };
+                let args = if self.has_ctx && has_object {
+                    quote! { ctx, object }
+                } else if has_object {
+                    quote! { object }
+                } else if self.has_ctx {
                     quote! { ctx }
                 } else {
                     quote! {}
@@ -373,6 +443,9 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
     let has_get = methods.iter().any(|m| m.kind == ExoticMethodKind::Get);
     let has_set = methods.iter().any(|m| m.kind == ExoticMethodKind::Set);
     let has_delete = methods.iter().any(|m| m.kind == ExoticMethodKind::Delete);
+    let has_define = methods
+        .iter()
+        .any(|m| m.kind == ExoticMethodKind::DefineOwnProperty);
     let has_has = methods.iter().any(|m| m.kind == ExoticMethodKind::Has);
 
     let default_get = if !has_get {
@@ -397,11 +470,12 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
+                _object: #crate_name::Value<'js>,
                 _receiver: #crate_name::Value<'js>,
                 _value: #crate_name::Value<'js>,
-            ) -> #crate_name::Result<bool> {
+            ) -> #crate_name::Result<#crate_name::class::ExoticSetResult> {
                 let _ = this;
-                Ok(false)
+                Ok(#crate_name::class::ExoticSetResult::Handled(false))
             }
         }
     } else {
@@ -414,9 +488,27 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
+                _object: #crate_name::Value<'js>,
             ) -> #crate_name::Result<bool> {
                 let _ = this;
                 Ok(false)
+            }
+        }
+    } else {
+        TokenStream::new()
+    };
+
+    let default_define = if !has_define {
+        quote! {
+            pub fn exotic_define_own_property<'js>(
+                this: &#crate_name::class::JsCell<'js, #self_ty>,
+                _ctx: &#crate_name::Ctx<'js>,
+                _atom: #crate_name::Atom<'js>,
+                _value: #crate_name::Value<'js>,
+                _is_data: bool,
+            ) -> #crate_name::Result<#crate_name::class::ExoticDefineResult> {
+                let _ = this;
+                Ok(#crate_name::class::ExoticDefineResult::Fallthrough)
             }
         }
     } else {
@@ -451,6 +543,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
+                _object: #crate_name::Value<'js>,
             ) -> #crate_name::Result<Option<#crate_name::class::PropertyDescriptor<'js>>> {
                 let _ = this;
                 Ok(None)
@@ -465,6 +558,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
             pub fn exotic_get_own_property_names<'js>(
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
+                _object: #crate_name::Value<'js>,
             ) -> #crate_name::Result<Vec<#crate_name::class::PropertyName<'js>>> {
                 let _ = this;
                 Ok(Vec::new())
@@ -487,10 +581,20 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
             pub(crate) struct ExoticImpl;
 
             impl ExoticImpl {
+                pub const HOOKS: #crate_name::class::ExoticHooks = #crate_name::class::ExoticHooks {
+                    get: #has_get,
+                    set: #has_set,
+                    delete: #has_delete,
+                    define_own_property: #has_define,
+                    has: #has_has,
+                    get_own_property: #has_get_own_property,
+                    get_own_property_names: #has_get_own_property_names,
+                };
                 #(#user_wrappers)*
                 #default_get
                 #default_set
                 #default_delete
+                #default_define
                 #default_has
                 #default_get_own_property
                 #default_get_own_property_names

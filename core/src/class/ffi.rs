@@ -1,4 +1,4 @@
-use super::{JsClass, Tracer};
+use super::{ExoticDefineResult, ExoticSetResult, JsClass, Tracer};
 use crate::{class::JsCell, function::Params, qjs, runtime::opaque::Opaque, Atom, Ctx, Value};
 use alloc::boxed::Box;
 use core::{any::TypeId, mem, panic::AssertUnwindSafe, ptr::NonNull};
@@ -12,8 +12,11 @@ pub(crate) unsafe extern "C" fn class_finalizer(rt: *mut qjs::JSRuntime, val: qj
 }
 
 /// FFI finalizer, destroying the object once it is delete by the Gc.
-pub(crate) unsafe extern "C" fn exotic_class_finalizer(rt: *mut qjs::JSRuntime, val: qjs::JSValue) {
-    let class_id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+pub(crate) unsafe extern "C" fn exotic_class_finalizer(
+    _rt: *mut qjs::JSRuntime,
+    val: qjs::JSValue,
+) {
+    let class_id = qjs::JS_GetClassID(val);
     let ptr = qjs::JS_GetOpaque(val, class_id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.finalizer)(ptr);
@@ -38,7 +41,7 @@ pub(crate) unsafe extern "C" fn exotic_class_trace(
     val: qjs::JSValue,
     mark_func: qjs::JS_MarkFunc,
 ) {
-    let class_id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let class_id = qjs::JS_GetClassID(val);
     let ptr = qjs::JS_GetOpaque(val, class_id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     let tracer = Tracer::from_ffi(rt, mark_func);
@@ -89,8 +92,7 @@ pub(crate) unsafe extern "C" fn exotic_get_property(
     atom: qjs::JSAtom,
     receiver: qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.get_property)(ptr, ctx, obj, atom, receiver)
@@ -105,8 +107,7 @@ pub(crate) unsafe extern "C" fn exotic_set_property(
     receiver: qjs::JSValueConst,
     flags: qjs::c_int,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.set_property)(ptr, ctx, obj, atom, receiver, value, flags)
@@ -118,8 +119,7 @@ pub(crate) unsafe extern "C" fn exotic_has_property(
     obj: qjs::JSValueConst,
     atom: qjs::JSAtom,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.has_property)(ptr, ctx, obj, atom)
@@ -131,11 +131,28 @@ pub(crate) unsafe extern "C" fn exotic_delete_property(
     obj: qjs::JSValueConst,
     prop: qjs::JSAtom,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.delete_property)(ptr, ctx, obj, prop)
+}
+
+pub(crate) unsafe extern "C" fn exotic_define_own_property(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    atom: qjs::JSAtom,
+    value: qjs::JSValueConst,
+    _getter: qjs::JSValueConst,
+    _setter: qjs::JSValueConst,
+    flags: qjs::c_int,
+) -> qjs::c_int {
+    let id = qjs::JS_GetClassID(obj);
+    let ptr = qjs::JS_GetOpaque(obj, id);
+    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+    let is_data = flags
+        & (qjs::JS_PROP_HAS_VALUE as qjs::c_int | qjs::JS_PROP_HAS_WRITABLE as qjs::c_int)
+        != 0;
+    (ptr.as_ref().v_table.define_own_property)(ptr, ctx, atom, value, is_data)
 }
 
 /// FFI exotic get_own_property function for classes with exotic behavior.
@@ -145,8 +162,7 @@ pub(crate) unsafe extern "C" fn exotic_get_own_property(
     obj: qjs::JSValueConst,
     prop: qjs::JSAtom,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.get_own_property)(ptr, ctx, desc, obj, prop)
@@ -159,8 +175,7 @@ pub(crate) unsafe extern "C" fn exotic_get_own_property_names(
     plen: *mut u32,
     obj: qjs::JSValueConst,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.get_own_property_names)(ptr, ctx, ptab, plen, obj)
@@ -211,6 +226,14 @@ pub(crate) type DeletePropertyFunc = unsafe fn(
     prop: qjs::JSAtom,
 ) -> qjs::c_int;
 
+pub(crate) type DefineOwnPropertyFunc = unsafe fn(
+    this_ptr: NonNull<ClassCell<()>>,
+    ctx: *mut qjs::JSContext,
+    atom: qjs::JSAtom,
+    value: qjs::JSValueConst,
+    is_data: bool,
+) -> qjs::c_int;
+
 pub(crate) type GetOwnPropertyFunc = unsafe fn(
     this_ptr: NonNull<ClassCell<()>>,
     ctx: *mut qjs::JSContext,
@@ -238,6 +261,7 @@ pub(crate) struct VTable {
     set_property: SetPropertyFunc,
     has_property: HasPropertyFunc,
     delete_property: DeletePropertyFunc,
+    define_own_property: DefineOwnPropertyFunc,
     get_own_property: GetOwnPropertyFunc,
     get_own_property_names: GetOwnPropertyNamesFunc,
 }
@@ -300,7 +324,7 @@ impl VTable {
     unsafe fn set_property_impl<'js, C: JsClass<'js>>(
         this_ptr: NonNull<ClassCell<()>>,
         ctx: *mut qjs::JSContext,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
         atom: qjs::JSAtom,
         receiver: qjs::JSValueConst,
         value: qjs::JSValue,
@@ -309,18 +333,25 @@ impl VTable {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
         let receiver = Value::from_js_value_const(ctx.clone(), receiver);
-        let value = Value::from_js_value(ctx.clone(), value);
+        let value = Value::from_js_value_const(ctx.clone(), value);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_set_property(&this_ptr.as_ref().data, &ctx, atom, receiver, value) {
-                Ok(v) => {
-                    if v {
-                        1
-                    } else {
-                        0
-                    }
-                }
+            match C::exotic_set_property(
+                &this_ptr.as_ref().data,
+                &ctx,
+                atom,
+                object,
+                receiver,
+                value,
+            ) {
+                Ok(ExoticSetResult::Handled(true)) => 1,
+                Ok(ExoticSetResult::Handled(false)) => 0,
+                // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
+                Ok(ExoticSetResult::Fallthrough) => 2,
+                // JS_EXOTIC_FALLTHROUGH_SKIP_OWN in our QuickJS-NG fork.
+                Ok(ExoticSetResult::FallthroughSkippingOwnProperty) => 3,
                 Err(e) => {
                     e.throw(&ctx);
                     -1
@@ -359,15 +390,16 @@ impl VTable {
     unsafe fn delete_property_impl<'js, C: JsClass<'js>>(
         this_ptr: NonNull<ClassCell<()>>,
         ctx: *mut qjs::JSContext,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
         atom: qjs::JSAtom,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_delete_property(&this_ptr.as_ref().data, &ctx, atom) {
+            match C::exotic_delete_property(&this_ptr.as_ref().data, &ctx, atom, object) {
                 Ok(v) => {
                     if v {
                         1
@@ -383,19 +415,47 @@ impl VTable {
         }))
     }
 
+    unsafe fn define_own_property_impl<'js, C: JsClass<'js>>(
+        this_ptr: NonNull<ClassCell<()>>,
+        ctx: *mut qjs::JSContext,
+        atom: qjs::JSAtom,
+        value: qjs::JSValueConst,
+        is_data: bool,
+    ) -> qjs::c_int {
+        let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+        let ctx = Ctx::from_ptr(ctx);
+        let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+        let value = Value::from_js_value_const(ctx.clone(), value);
+
+        ctx.handle_panic_exotic(AssertUnwindSafe(|| {
+            match C::exotic_define_own_property(&this_ptr.as_ref().data, &ctx, atom, value, is_data)
+            {
+                Ok(ExoticDefineResult::Handled(true)) => 1,
+                Ok(ExoticDefineResult::Handled(false)) => 0,
+                // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
+                Ok(ExoticDefineResult::Fallthrough) => 2,
+                Err(error) => {
+                    error.throw(&ctx);
+                    -1
+                }
+            }
+        }))
+    }
+
     unsafe fn get_own_property_impl<'js, C: JsClass<'js>>(
         this_ptr: NonNull<ClassCell<()>>,
         ctx: *mut qjs::JSContext,
         desc: *mut qjs::JSPropertyDescriptor,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
         prop: qjs::JSAtom,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), prop);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_get_own_property(&this_ptr.as_ref().data, &ctx, atom) {
+            match C::exotic_get_own_property(&this_ptr.as_ref().data, &ctx, atom, object) {
                 Ok(Some(property)) => {
                     if !desc.is_null() {
                         let mut flags: qjs::c_int = 0;
@@ -436,13 +496,14 @@ impl VTable {
         ctx: *mut qjs::JSContext,
         ptab: *mut *mut qjs::JSPropertyEnum,
         plen: *mut u32,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_get_own_property_names(&this_ptr.as_ref().data, &ctx) {
+            match C::exotic_get_own_property_names(&this_ptr.as_ref().data, &ctx, object) {
                 Ok(names) => {
                     let len = names.len();
                     let size = mem::size_of::<qjs::JSPropertyEnum>()
@@ -486,6 +547,7 @@ impl VTable {
                 set_property: VTable::set_property_impl::<C>,
                 has_property: VTable::has_property_impl::<C>,
                 delete_property: VTable::delete_property_impl::<C>,
+                define_own_property: VTable::define_own_property_impl::<C>,
                 get_own_property: VTable::get_own_property_impl::<C>,
                 get_own_property_names: VTable::get_own_property_names_impl::<C>,
             };

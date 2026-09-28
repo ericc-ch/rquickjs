@@ -11,7 +11,7 @@ use super::{
 use alloc::boxed::Box;
 use core::{
     any::{Any, TypeId},
-    cell::{Cell, UnsafeCell},
+    cell::{Cell, RefCell, UnsafeCell},
     marker::PhantomData,
     ptr,
 };
@@ -49,8 +49,7 @@ pub(crate) struct Opaque<'js> {
     class_id: qjs::JSClassID,
     /// The class id for rust classes which can be called.
     callable_class_id: qjs::JSClassID,
-    /// The class id for exotic classes
-    exotic_class_id: qjs::JSClassID,
+    exotic_classes: RefCell<HashMap<TypeId, ExoticClass>>,
 
     prototypes: UnsafeCell<HashMap<TypeId, Option<Object<'js>>>>,
 
@@ -59,9 +58,12 @@ pub(crate) struct Opaque<'js> {
     #[cfg(feature = "futures")]
     spawner: Option<UnsafeCell<Spawner>>,
 
-    exotic_methods: ExoticMethodsHolder,
-
     _marker: PhantomData<&'js ()>,
+}
+
+struct ExoticClass {
+    id: qjs::JSClassID,
+    _methods: ExoticMethodsHolder,
 }
 
 impl<'js> Opaque<'js> {
@@ -77,7 +79,7 @@ impl<'js> Opaque<'js> {
 
             class_id: qjs::JS_INVALID_CLASS_ID,
             callable_class_id: qjs::JS_INVALID_CLASS_ID,
-            exotic_class_id: qjs::JS_INVALID_CLASS_ID,
+            exotic_classes: RefCell::new(HashMap::new()),
 
             prototypes: UnsafeCell::new(HashMap::new()),
 
@@ -87,8 +89,6 @@ impl<'js> Opaque<'js> {
 
             #[cfg(feature = "futures")]
             spawner: None,
-
-            exotic_methods: ExoticMethodsHolder::new(),
         }
     }
 
@@ -102,7 +102,6 @@ impl<'js> Opaque<'js> {
     pub unsafe fn initialize(&mut self, rt: *mut qjs::JSRuntime) -> Result<(), Error> {
         qjs::JS_NewClassID(rt, (&mut self.class_id) as *mut qjs::JSClassID);
         qjs::JS_NewClassID(rt, (&mut self.callable_class_id) as *mut qjs::JSClassID);
-        qjs::JS_NewClassID(rt, (&mut self.exotic_class_id) as *mut qjs::JSClassID);
 
         let class_def = qjs::JSClassDef {
             class_name: c"RustClass".as_ptr().cast(),
@@ -125,18 +124,6 @@ impl<'js> Opaque<'js> {
         };
 
         if 0 != qjs::JS_NewClass(rt, self.callable_class_id, &class_def) {
-            return Err(Error::Unknown);
-        }
-
-        let class_def = qjs::JSClassDef {
-            class_name: c"RustExotic".as_ptr().cast(),
-            finalizer: Some(class::ffi::exotic_class_finalizer),
-            gc_mark: Some(class::ffi::exotic_class_trace),
-            call: None,
-            exotic: self.exotic_methods.as_ptr(),
-        };
-
-        if 0 != qjs::JS_NewClass(rt, self.exotic_class_id, &class_def) {
             return Err(Error::Unknown);
         }
 
@@ -256,8 +243,42 @@ impl<'js> Opaque<'js> {
         self.callable_class_id
     }
 
-    pub fn get_exotic_id(&self) -> qjs::JSClassID {
-        self.exotic_class_id
+    /// Registers an exotic JS class for this Rust type on first use.
+    ///
+    /// # Safety
+    /// `rt` must be the live QuickJS runtime associated with this `Opaque`.
+    /// Registration must happen while holding the runtime lock. The boxed
+    /// exotic methods remain allocated until after `JS_FreeRuntime` returns.
+    pub(crate) unsafe fn get_or_register_exotic<C: JsClass<'js>>(
+        &self,
+        rt: *mut qjs::JSRuntime,
+    ) -> Result<qjs::JSClassID, Error> {
+        let key = VTable::get::<C>().id();
+        let mut classes = self.exotic_classes.borrow_mut();
+        if let Some(class) = classes.get(&key) {
+            return Ok(class.id);
+        }
+        let methods = ExoticMethodsHolder::new(C::EXOTIC_HOOKS);
+        let mut id = qjs::JS_INVALID_CLASS_ID;
+        qjs::JS_NewClassID(rt, &mut id);
+        let class_def = qjs::JSClassDef {
+            class_name: c"RustExotic".as_ptr().cast(),
+            finalizer: Some(class::ffi::exotic_class_finalizer),
+            gc_mark: Some(class::ffi::exotic_class_trace),
+            call: None,
+            exotic: methods.as_ptr(),
+        };
+        if qjs::JS_NewClass(rt, id, &class_def) != 0 {
+            return Err(Error::Unknown);
+        }
+        classes.insert(
+            key,
+            ExoticClass {
+                id,
+                _methods: methods,
+            },
+        );
+        Ok(id)
     }
 
     pub fn get_or_insert_prototype<C: JsClass<'js>>(
