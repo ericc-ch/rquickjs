@@ -402,6 +402,16 @@ impl Class {
                     #exotic_module::ExoticImpl::exotic_delete_property(this, ctx, atom)
                 }
 
+                fn exotic_define_own_property(
+                    this: &#crate_name::class::JsCell<'js, Self>,
+                    ctx: &#crate_name::Ctx<'js>,
+                    atom: #crate_name::Atom<'js>,
+                    value: #crate_name::Value<'js>,
+                    is_data: bool,
+                ) -> #crate_name::Result<#crate_name::class::ExoticDefineResult> {
+                    #exotic_module::ExoticImpl::exotic_define_own_property(this, ctx, atom, value, is_data)
+                }
+
                 fn exotic_has_property(
                     this: &#crate_name::class::JsCell<'js, Self>,
                     ctx: &#crate_name::Ctx<'js>,

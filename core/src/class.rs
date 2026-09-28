@@ -46,6 +46,8 @@ pub struct ExoticHooks {
     pub set: bool,
     /// Intercept property deletion.
     pub delete: bool,
+    /// Intercept definitions of computed own properties.
+    pub define_own_property: bool,
     /// Intercept membership tests, including inherited properties.
     pub has: bool,
     /// Provide computed own property descriptors.
@@ -60,6 +62,7 @@ impl ExoticHooks {
         get: true,
         set: true,
         delete: true,
+        define_own_property: true,
         has: true,
         get_own_property: true,
         get_own_property_names: true,
@@ -83,6 +86,15 @@ impl From<bool> for ExoticSetResult {
     fn from(value: bool) -> Self {
         Self::Handled(value)
     }
+}
+
+/// Outcome of an exotic own-property definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExoticDefineResult {
+    /// The class handled the definition, with this success state.
+    Handled(bool),
+    /// Continue with QuickJS's ordinary property definition.
+    Fallthrough,
 }
 
 /// A JavaScript property descriptor returned from [`JsClass::exotic_get_own_property`].
@@ -196,6 +208,19 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
     ) -> Result<bool> {
         let _ = this;
         Ok(false)
+    }
+
+    /// Called when QuickJS creates an own property on an exotic object.
+    /// `is_data` is false when the descriptor has a getter or setter.
+    fn exotic_define_own_property(
+        this: &JsCell<'js, Self>,
+        _ctx: &Ctx<'js>,
+        _atom: Atom<'js>,
+        _value: Value<'js>,
+        _is_data: bool,
+    ) -> Result<ExoticDefineResult> {
+        let _ = this;
+        Ok(ExoticDefineResult::Fallthrough)
     }
 
     /// The function which will be called if has property or similar is called on an object with this class

@@ -1,7 +1,7 @@
 #![cfg(feature = "macro")]
 
 use rquickjs::{
-    class::{ExoticSetResult, PropertyDescriptor, PropertyName, Trace},
+    class::{ExoticDefineResult, ExoticSetResult, PropertyDescriptor, PropertyName, Trace},
     Atom, Class, Context, Ctx, IntoJs, JsLifetime, Result, Runtime, Value,
 };
 
@@ -20,6 +20,20 @@ impl Collection {
 
 #[rquickjs::exotic]
 impl Collection {
+    #[qjs(define_own_property)]
+    fn define(
+        &self,
+        atom: Atom<'_>,
+        _value: Value<'_>,
+        _is_data: bool,
+    ) -> Result<ExoticDefineResult> {
+        Ok(if atom.to_string()? == "0" {
+            ExoticDefineResult::Handled(false)
+        } else {
+            ExoticDefineResult::Fallthrough
+        })
+    }
+
     #[qjs(get_own_property_names)]
     fn own_names<'js>(&self, ctx: &Ctx<'js>) -> Result<Vec<PropertyName<'js>>> {
         Ok(vec![PropertyName {
@@ -145,6 +159,9 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
         )?);
         assert!(ctx.eval::<bool, _>(
             "collection.someProperty = 3; JSON.stringify(Object.getOwnPropertyNames(collection)) === '[\"0\",\"someProperty\"]'"
+        )?);
+        assert!(ctx.eval::<bool, _>(
+            "Reflect.defineProperty(collection, 'ordinary', { value: 9 }) && collection.ordinary === 9 && !Reflect.defineProperty(collection, '0', { value: 7 }) && collection[0] === 42"
         )?);
         assert!(ctx.eval::<bool, _>("custom.custom === 7")?);
         Ok(())

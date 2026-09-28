@@ -17,7 +17,9 @@ impl ExoticMethodsHolder {
             delete_property: hooks
                 .delete
                 .then_some(crate::class::ffi::exotic_delete_property),
-            define_own_property: None, // TODO: Implement
+            define_own_property: hooks
+                .define_own_property
+                .then_some(crate::class::ffi::exotic_define_own_property),
             has_property: hooks.has.then_some(crate::class::ffi::exotic_has_property),
             set_property: hooks.set.then_some(crate::class::ffi::exotic_set_property),
             get_property: hooks.get.then_some(crate::class::ffi::exotic_get_property),
