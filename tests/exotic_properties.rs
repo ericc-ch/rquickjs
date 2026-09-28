@@ -2,7 +2,7 @@
 
 use rquickjs::{
     class::{ExoticDefineResult, ExoticSetResult, PropertyDescriptor, PropertyName, Trace},
-    Atom, Class, Context, Ctx, IntoJs, JsLifetime, Result, Runtime, Value,
+    Atom, Class, Context, Ctx, IntoJs, JsLifetime, Object, Result, Runtime, Value,
 };
 
 #[derive(Trace, JsLifetime)]
@@ -23,6 +23,7 @@ impl Collection {
     #[qjs(define_own_property)]
     fn define(
         &self,
+        ctx: &Ctx<'_>,
         atom: Atom<'_>,
         _value: Value<'_>,
         is_data: bool,
@@ -30,16 +31,26 @@ impl Collection {
         Ok(match atom.to_string()?.as_str() {
             "0" => ExoticDefineResult::Handled(false),
             "indexed" => ExoticDefineResult::Handled(is_data),
+            "during" => {
+                ctx.eval::<(), _>("if (!globalThis.defining) { globalThis.defining = true; Object.defineProperty(collection, 'during', { value: 4, configurable: true }); }")?;
+                ExoticDefineResult::Fallthrough
+            }
             _ => ExoticDefineResult::Fallthrough,
         })
     }
 
     #[qjs(get_own_property_names)]
-    fn own_names<'js>(&self, ctx: &Ctx<'js>) -> Result<Vec<PropertyName<'js>>> {
-        Ok(vec![PropertyName {
-            atom: Atom::from_u32(ctx.clone(), 0)?,
-            is_enumerable: true,
-        }])
+    fn own_names<'js>(&self, ctx: &Ctx<'js>, object: Value<'js>) -> Result<Vec<PropertyName<'js>>> {
+        assert!(object.is_object());
+        [10, 2, 0]
+            .into_iter()
+            .map(|index| {
+                Ok(PropertyName {
+                    atom: Atom::from_u32(ctx.clone(), index)?,
+                    is_enumerable: true,
+                })
+            })
+            .collect()
     }
 
     #[qjs(get_own_property)]
@@ -47,7 +58,9 @@ impl Collection {
         &self,
         ctx: &Ctx<'js>,
         atom: Atom<'js>,
+        object: Value<'js>,
     ) -> Result<Option<PropertyDescriptor<'js>>> {
+        assert!(object.is_object());
         if atom.to_string()? == "0" {
             Ok(Some(PropertyDescriptor::new_value(
                 self.value.into_js(ctx)?,
@@ -158,7 +171,7 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
             "collection[0] === 42 && collection.item() === 42 && 'item' in collection && '0' in collection"
         )?);
         assert!(ctx.eval::<bool, _>(
-            "collection.someProperty = 3; JSON.stringify(Object.getOwnPropertyNames(collection)) === '[\"0\",\"someProperty\"]'"
+            "collection.someProperty = 3; JSON.stringify(Object.getOwnPropertyNames(collection)) === '[\"0\",\"2\",\"10\",\"someProperty\"]'"
         )?);
         assert!(ctx.eval::<bool, _>(
             "Reflect.defineProperty(collection, 'ordinary', { value: 9 }) && collection.ordinary === 9 && !Reflect.defineProperty(collection, '0', { value: 7 }) && collection[0] === 42"
@@ -166,6 +179,13 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
         assert!(ctx.eval::<bool, _>(
             "!Reflect.defineProperty(collection, 'indexed', {}) && !Reflect.defineProperty(collection, 'indexed', { get() {} }) && Reflect.defineProperty(collection, 'indexed', { writable: true })"
         )?);
+        assert!(ctx.eval::<bool, _>(
+            "Reflect.defineProperty(collection, 'during', { value: 8, configurable: true }) && Reflect.ownKeys(collection).filter(key => key === 'during').length === 1 && collection.during === 8"
+        )?);
+        let object: Object = ctx.globals().get("collection")?;
+        assert!(object.contains_own_key("during")?);
+        assert!(!object.contains_own_key("item")?);
+        assert!(object.get_prototype().unwrap().contains_own_key("item")?);
         assert!(ctx.eval::<bool, _>("custom.custom === 7")?);
         Ok(())
     })

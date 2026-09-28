@@ -205,6 +205,7 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
+        _object: Value<'js>,
     ) -> Result<bool> {
         let _ = this;
         Ok(false)
@@ -240,6 +241,7 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
+        _object: Value<'js>,
     ) -> Result<Option<PropertyDescriptor<'js>>> {
         let _ = this;
         Ok(None)
@@ -251,6 +253,7 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
     fn exotic_get_own_property_names(
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
+        _object: Value<'js>,
     ) -> Result<Vec<PropertyName<'js>>> {
         let _ = this;
         Ok(Vec::new())
@@ -1113,6 +1116,7 @@ mod test {
                 _this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
                 _atom: crate::Atom<'js>,
+                _object: crate::Value<'js>,
             ) -> crate::Result<bool> {
                 let err_val = crate::String::from_str(ctx.clone(), "Properties cannot be deleted")?
                     .into_value();
@@ -1123,6 +1127,7 @@ mod test {
                 this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
                 atom: crate::Atom<'js>,
+                _object: crate::Value<'js>,
             ) -> crate::Result<Option<super::PropertyDescriptor<'js>>> {
                 let name = atom.to_string()?;
                 if name == "hello" || name == "i" {
@@ -1142,6 +1147,7 @@ mod test {
             fn exotic_get_own_property_names(
                 _this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
+                _object: crate::Value<'js>,
             ) -> crate::Result<Vec<super::PropertyName<'js>>> {
                 Ok(vec![
                     super::PropertyName {

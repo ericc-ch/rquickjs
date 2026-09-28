@@ -300,7 +300,27 @@ impl ExoticMethod {
                     conversion,
                 )
             }
-            ExoticMethodKind::Delete | ExoticMethodKind::Has => {
+            ExoticMethodKind::Delete => {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, object: #crate_name::Value<'js> };
+                let has_object = self.kind == ExoticMethodKind::Delete
+                    && self.sig.inputs.len() > if self.has_ctx { 3 } else { 2 };
+                let args = if self.has_ctx && has_object {
+                    quote! { ctx, atom, object }
+                } else if has_object {
+                    quote! { atom, object }
+                } else if self.has_ctx {
+                    quote! { ctx, atom }
+                } else {
+                    quote! { atom }
+                };
+                let conversion = if self.returns_result {
+                    quote! { result }
+                } else {
+                    quote! { Ok(result) }
+                };
+                (params, args, quote! { bool }, conversion)
+            }
+            ExoticMethodKind::Has => {
                 let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js> };
                 let args = if self.has_ctx {
                     quote! { ctx, atom }
@@ -315,8 +335,13 @@ impl ExoticMethod {
                 (params, args, quote! { bool }, conversion)
             }
             ExoticMethodKind::GetOwnProperty => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js> };
-                let args = if self.has_ctx {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, object: #crate_name::Value<'js> };
+                let has_object = self.sig.inputs.len() > if self.has_ctx { 3 } else { 2 };
+                let args = if self.has_ctx && has_object {
+                    quote! { ctx, atom, object }
+                } else if has_object {
+                    quote! { atom, object }
+                } else if self.has_ctx {
                     quote! { ctx, atom }
                 } else {
                     quote! { atom }
@@ -334,8 +359,14 @@ impl ExoticMethod {
                 )
             }
             ExoticMethodKind::GetOwnPropertyNames => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js> };
-                let args = if self.has_ctx {
+                let params =
+                    quote! { ctx: &#crate_name::Ctx<'js>, object: #crate_name::Value<'js> };
+                let has_object = self.sig.inputs.len() > if self.has_ctx { 2 } else { 1 };
+                let args = if self.has_ctx && has_object {
+                    quote! { ctx, object }
+                } else if has_object {
+                    quote! { object }
+                } else if self.has_ctx {
                     quote! { ctx }
                 } else {
                     quote! {}
@@ -457,6 +488,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
+                _object: #crate_name::Value<'js>,
             ) -> #crate_name::Result<bool> {
                 let _ = this;
                 Ok(false)
@@ -511,6 +543,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
+                _object: #crate_name::Value<'js>,
             ) -> #crate_name::Result<Option<#crate_name::class::PropertyDescriptor<'js>>> {
                 let _ = this;
                 Ok(None)
@@ -525,6 +558,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
             pub fn exotic_get_own_property_names<'js>(
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
+                _object: #crate_name::Value<'js>,
             ) -> #crate_name::Result<Vec<#crate_name::class::PropertyName<'js>>> {
                 let _ = this;
                 Ok(Vec::new())

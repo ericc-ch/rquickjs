@@ -390,15 +390,16 @@ impl VTable {
     unsafe fn delete_property_impl<'js, C: JsClass<'js>>(
         this_ptr: NonNull<ClassCell<()>>,
         ctx: *mut qjs::JSContext,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
         atom: qjs::JSAtom,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_delete_property(&this_ptr.as_ref().data, &ctx, atom) {
+            match C::exotic_delete_property(&this_ptr.as_ref().data, &ctx, atom, object) {
                 Ok(v) => {
                     if v {
                         1
@@ -445,15 +446,16 @@ impl VTable {
         this_ptr: NonNull<ClassCell<()>>,
         ctx: *mut qjs::JSContext,
         desc: *mut qjs::JSPropertyDescriptor,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
         prop: qjs::JSAtom,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), prop);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_get_own_property(&this_ptr.as_ref().data, &ctx, atom) {
+            match C::exotic_get_own_property(&this_ptr.as_ref().data, &ctx, atom, object) {
                 Ok(Some(property)) => {
                     if !desc.is_null() {
                         let mut flags: qjs::c_int = 0;
@@ -494,13 +496,14 @@ impl VTable {
         ctx: *mut qjs::JSContext,
         ptab: *mut *mut qjs::JSPropertyEnum,
         plen: *mut u32,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_get_own_property_names(&this_ptr.as_ref().data, &ctx) {
+            match C::exotic_get_own_property_names(&this_ptr.as_ref().data, &ctx, object) {
                 Ok(names) => {
                     let len = names.len();
                     let size = mem::size_of::<qjs::JSPropertyEnum>()

@@ -62,6 +62,26 @@ impl<'js> Object<'js> {
         }
     }
 
+    /// Check whether this object itself has a property, without walking its prototype chain.
+    pub fn contains_own_key<K>(&self, k: K) -> Result<bool>
+    where
+        K: IntoAtom<'js>,
+    {
+        let atom = k.into_atom(self.ctx())?;
+        unsafe {
+            let res = qjs::JS_GetOwnProperty(
+                self.0.ctx.as_ptr(),
+                core::ptr::null_mut(),
+                self.0.as_js_value(),
+                atom.atom,
+            );
+            if res < 0 {
+                return Err(self.0.ctx.raise_exception());
+            }
+            Ok(res == 1)
+        }
+    }
+
     /// Set a member of an object to a certain value
     pub fn set<K: IntoAtom<'js>, V: IntoJs<'js>>(&self, key: K, value: V) -> Result<()> {
         let atom = key.into_atom(self.ctx())?;
