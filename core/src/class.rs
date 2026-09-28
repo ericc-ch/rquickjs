@@ -74,6 +74,9 @@ pub enum ExoticSetResult {
     Handled(bool),
     /// The exotic setter did not handle this property.
     Fallthrough,
+    /// The exotic setter ignores this computed property when the receiver is
+    /// another object; continue searching at the holder's prototype.
+    FallthroughSkippingOwnProperty,
 }
 
 impl From<bool> for ExoticSetResult {

@@ -323,6 +323,8 @@ impl VTable {
                 Ok(ExoticSetResult::Handled(false)) => 0,
                 // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
                 Ok(ExoticSetResult::Fallthrough) => 2,
+                // JS_EXOTIC_FALLTHROUGH_SKIP_OWN in our QuickJS-NG fork.
+                Ok(ExoticSetResult::FallthroughSkippingOwnProperty) => 3,
                 Err(e) => {
                     e.throw(&ctx);
                     -1

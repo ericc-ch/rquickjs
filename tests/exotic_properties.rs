@@ -81,6 +81,10 @@ impl WritableCollection {
                 "Object.defineProperty(collection, 'receiverOwn', { value: 5, writable: true, enumerable: true, configurable: true })",
             )?;
             Ok(ExoticSetResult::Fallthrough)
+        } else if atom.to_string()? == "blocked" {
+            Ok(ExoticSetResult::Handled(false))
+        } else if atom.to_string()? == "named" && object != receiver {
+            Ok(ExoticSetResult::FallthroughSkippingOwnProperty)
         } else if atom.to_string()? == "0" {
             if object != receiver {
                 return Ok(ExoticSetResult::Fallthrough);
@@ -98,7 +102,14 @@ impl WritableCollection {
         ctx: &Ctx<'js>,
         atom: Atom<'js>,
     ) -> Result<Option<PropertyDescriptor<'js>>> {
-        if atom.to_string()? == "0" {
+        if atom.to_string()? == "named" {
+            Ok(Some(PropertyDescriptor::new_value(
+                8.into_js(ctx)?,
+                true,
+                false,
+                false,
+            )))
+        } else if atom.to_string()? == "0" {
             Ok(Some(PropertyDescriptor::new_value(
                 self.indexed.into_js(ctx)?,
                 true,
@@ -146,6 +157,9 @@ fn indexed_setter_preserves_ordinary_assignment() -> Result<()> {
             "const derived = Object.create(collection); derived[0] = 9; derived[0] === 9 && collection[0] === 42"
         )?);
         assert!(ctx.eval::<bool, _>(
+            "derived.named = 3; derived.named === 3 && collection.named === 8"
+        )?);
+        assert!(ctx.eval::<bool, _>(
             "globalThis.target = Object.create(collection); target.detached = { value: 3 }; target.detached.value === 3 && Object.getPrototypeOf(target) === Object.prototype"
         )?);
         assert_eq!(ctx.eval::<String, _>(
@@ -153,6 +167,9 @@ fn indexed_setter_preserves_ordinary_assignment() -> Result<()> {
         )?, "[7,[\"defined\"]]");
         assert!(ctx.eval::<bool, _>(
             "collection.receiverOwn = 7; collection.receiverOwn === 7 && Object.getOwnPropertyNames(collection).filter(name => name === 'receiverOwn').length === 1"
+        )?);
+        assert!(ctx.eval::<bool, _>(
+            "(function() { 'use strict'; try { collection.blocked = 1; return false; } catch (error) { return error instanceof TypeError; } })()"
         )?);
         Ok(())
     })
