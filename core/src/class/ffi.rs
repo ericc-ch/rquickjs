@@ -1,4 +1,4 @@
-use super::{JsClass, Tracer};
+use super::{ExoticSetResult, JsClass, Tracer};
 use crate::{class::JsCell, function::Params, qjs, runtime::opaque::Opaque, Atom, Ctx, Value};
 use alloc::boxed::Box;
 use core::{any::TypeId, mem, panic::AssertUnwindSafe, ptr::NonNull};
@@ -12,8 +12,11 @@ pub(crate) unsafe extern "C" fn class_finalizer(rt: *mut qjs::JSRuntime, val: qj
 }
 
 /// FFI finalizer, destroying the object once it is delete by the Gc.
-pub(crate) unsafe extern "C" fn exotic_class_finalizer(rt: *mut qjs::JSRuntime, val: qjs::JSValue) {
-    let class_id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+pub(crate) unsafe extern "C" fn exotic_class_finalizer(
+    _rt: *mut qjs::JSRuntime,
+    val: qjs::JSValue,
+) {
+    let class_id = qjs::JS_GetClassID(val);
     let ptr = qjs::JS_GetOpaque(val, class_id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.finalizer)(ptr);
@@ -38,7 +41,7 @@ pub(crate) unsafe extern "C" fn exotic_class_trace(
     val: qjs::JSValue,
     mark_func: qjs::JS_MarkFunc,
 ) {
-    let class_id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let class_id = qjs::JS_GetClassID(val);
     let ptr = qjs::JS_GetOpaque(val, class_id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     let tracer = Tracer::from_ffi(rt, mark_func);
@@ -89,8 +92,7 @@ pub(crate) unsafe extern "C" fn exotic_get_property(
     atom: qjs::JSAtom,
     receiver: qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.get_property)(ptr, ctx, obj, atom, receiver)
@@ -105,8 +107,7 @@ pub(crate) unsafe extern "C" fn exotic_set_property(
     receiver: qjs::JSValueConst,
     flags: qjs::c_int,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.set_property)(ptr, ctx, obj, atom, receiver, value, flags)
@@ -118,8 +119,7 @@ pub(crate) unsafe extern "C" fn exotic_has_property(
     obj: qjs::JSValueConst,
     atom: qjs::JSAtom,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.has_property)(ptr, ctx, obj, atom)
@@ -131,8 +131,7 @@ pub(crate) unsafe extern "C" fn exotic_delete_property(
     obj: qjs::JSValueConst,
     prop: qjs::JSAtom,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.delete_property)(ptr, ctx, obj, prop)
@@ -145,8 +144,7 @@ pub(crate) unsafe extern "C" fn exotic_get_own_property(
     obj: qjs::JSValueConst,
     prop: qjs::JSAtom,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.get_own_property)(ptr, ctx, desc, obj, prop)
@@ -159,8 +157,7 @@ pub(crate) unsafe extern "C" fn exotic_get_own_property_names(
     plen: *mut u32,
     obj: qjs::JSValueConst,
 ) -> qjs::c_int {
-    let rt = qjs::JS_GetRuntime(ctx);
-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+    let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
     let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.get_own_property_names)(ptr, ctx, ptab, plen, obj)
@@ -310,17 +307,14 @@ impl VTable {
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
         let receiver = Value::from_js_value_const(ctx.clone(), receiver);
-        let value = Value::from_js_value(ctx.clone(), value);
+        let value = Value::from_js_value_const(ctx.clone(), value);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
             match C::exotic_set_property(&this_ptr.as_ref().data, &ctx, atom, receiver, value) {
-                Ok(v) => {
-                    if v {
-                        1
-                    } else {
-                        0
-                    }
-                }
+                Ok(ExoticSetResult::Handled(true)) => 1,
+                Ok(ExoticSetResult::Handled(false)) => 0,
+                // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
+                Ok(ExoticSetResult::Fallthrough) => 2,
                 Err(e) => {
                     e.throw(&ctx);
                     -1

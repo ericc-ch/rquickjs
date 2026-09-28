@@ -1,0 +1,146 @@
+#![cfg(feature = "macro")]
+
+use rquickjs::{
+    class::{ExoticSetResult, PropertyDescriptor, Trace},
+    Atom, Class, Context, Ctx, IntoJs, JsLifetime, Result, Runtime, Value,
+};
+
+#[derive(Trace, JsLifetime)]
+#[rquickjs::class(exotic)]
+struct Collection {
+    value: i32,
+}
+
+#[rquickjs::methods]
+impl Collection {
+    fn item(&self) -> i32 {
+        self.value
+    }
+}
+
+#[rquickjs::exotic]
+impl Collection {
+    #[qjs(get_own_property)]
+    fn own_property<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        atom: Atom<'js>,
+    ) -> Result<Option<PropertyDescriptor<'js>>> {
+        if atom.to_string()? == "0" {
+            Ok(Some(PropertyDescriptor::new_value(
+                self.value.into_js(ctx)?,
+                true,
+                true,
+                false,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[derive(Trace, JsLifetime)]
+#[rquickjs::class(exotic)]
+struct CustomGet {}
+
+#[rquickjs::exotic]
+impl CustomGet {
+    #[qjs(get)]
+    fn get(&self, atom: Atom<'_>) -> Result<Option<i32>> {
+        Ok((atom.to_string()? == "custom").then_some(7))
+    }
+}
+
+#[derive(Trace, JsLifetime)]
+#[rquickjs::class(exotic)]
+struct WritableCollection {
+    indexed: i32,
+}
+
+#[rquickjs::exotic]
+impl WritableCollection {
+    #[qjs(set)]
+    fn set(&mut self, ctx: &Ctx<'_>, atom: Atom<'_>, value: Value<'_>) -> Result<ExoticSetResult> {
+        if atom.to_string()? == "detached" {
+            ctx.eval::<(), _>("Object.setPrototypeOf(target, Object.prototype)")?;
+            Ok(ExoticSetResult::Fallthrough)
+        } else if atom.to_string()? == "defined" {
+            ctx.eval::<(), _>(
+                "Object.defineProperty(target, 'defined', { value: 5, writable: true, enumerable: true, configurable: true })",
+            )?;
+            Ok(ExoticSetResult::Fallthrough)
+        } else if atom.to_string()? == "receiverOwn" {
+            ctx.eval::<(), _>(
+                "Object.defineProperty(collection, 'receiverOwn', { value: 5, writable: true, enumerable: true, configurable: true })",
+            )?;
+            Ok(ExoticSetResult::Fallthrough)
+        } else if atom.to_string()? == "0" {
+            self.indexed = value.as_int().expect("integer test value");
+            Ok(ExoticSetResult::Handled(true))
+        } else {
+            Ok(ExoticSetResult::Fallthrough)
+        }
+    }
+
+    #[qjs(get_own_property)]
+    fn own_property<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        atom: Atom<'js>,
+    ) -> Result<Option<PropertyDescriptor<'js>>> {
+        if atom.to_string()? == "0" {
+            Ok(Some(PropertyDescriptor::new_value(
+                self.indexed.into_js(ctx)?,
+                true,
+                true,
+                true,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[test]
+fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<()> {
+    let runtime = Runtime::new()?;
+    let context = Context::full(&runtime)?;
+    context.with(|ctx| {
+        ctx.globals()
+            .set("collection", Class::instance(ctx.clone(), Collection { value: 42 })?)?;
+        ctx.globals()
+            .set("custom", Class::instance(ctx.clone(), CustomGet {})?)?;
+
+        assert!(ctx.eval::<bool, _>(
+            "collection[0] === 42 && collection.item() === 42 && 'item' in collection && '0' in collection"
+        )?);
+        assert!(ctx.eval::<bool, _>("custom.custom === 7")?);
+        Ok(())
+    })
+}
+
+#[test]
+fn indexed_setter_preserves_ordinary_assignment() -> Result<()> {
+    let runtime = Runtime::new()?;
+    let context = Context::full(&runtime)?;
+    context.with(|ctx| {
+        ctx.globals().set(
+            "collection",
+            Class::instance(ctx.clone(), WritableCollection { indexed: 1 })?,
+        )?;
+
+        assert!(ctx.eval::<bool, _>(
+            "collection[0] = 42; collection.custom = { value: 7 }; collection[0] === 42 && collection.custom.value === 7"
+        )?);
+        assert!(ctx.eval::<bool, _>(
+            "globalThis.target = Object.create(collection); target.detached = { value: 3 }; target.detached.value === 3 && Object.getPrototypeOf(target) === Object.prototype"
+        )?);
+        assert_eq!(ctx.eval::<String, _>(
+            "Object.setPrototypeOf(target, collection); target.defined = 7; JSON.stringify([target.defined, Object.getOwnPropertyNames(target).filter(name => name === 'defined')])"
+        )?, "[7,[\"defined\"]]");
+        assert!(ctx.eval::<bool, _>(
+            "collection.receiverOwn = 7; collection.receiverOwn === 7 && Object.getOwnPropertyNames(collection).filter(name => name === 'receiverOwn').length === 1"
+        )?);
+        Ok(())
+    })
+}

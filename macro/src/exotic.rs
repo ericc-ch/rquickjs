@@ -255,11 +255,16 @@ impl ExoticMethod {
                     quote! { atom, value }
                 };
                 let conversion = if self.returns_result {
-                    quote! { result }
+                    quote! { result.map(#crate_name::class::ExoticSetResult::from) }
                 } else {
-                    quote! { Ok(result) }
+                    quote! { Ok(#crate_name::class::ExoticSetResult::from(result)) }
                 };
-                (params, args, quote! { bool }, conversion)
+                (
+                    params,
+                    args,
+                    quote! { #crate_name::class::ExoticSetResult },
+                    conversion,
+                )
             }
             ExoticMethodKind::Delete | ExoticMethodKind::Has => {
                 let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js> };
@@ -399,9 +404,9 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 _atom: #crate_name::Atom<'js>,
                 _receiver: #crate_name::Value<'js>,
                 _value: #crate_name::Value<'js>,
-            ) -> #crate_name::Result<bool> {
+            ) -> #crate_name::Result<#crate_name::class::ExoticSetResult> {
                 let _ = this;
-                Ok(false)
+                Ok(#crate_name::class::ExoticSetResult::Handled(false))
             }
         }
     } else {
@@ -487,6 +492,14 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
             pub(crate) struct ExoticImpl;
 
             impl ExoticImpl {
+                pub const HOOKS: #crate_name::class::ExoticHooks = #crate_name::class::ExoticHooks {
+                    get: #has_get,
+                    set: #has_set,
+                    delete: #has_delete,
+                    has: #has_has,
+                    get_own_property: #has_get_own_property,
+                    get_own_property_names: #has_get_own_property_names,
+                };
                 #(#user_wrappers)*
                 #default_get
                 #default_set

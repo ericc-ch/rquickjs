@@ -362,7 +362,11 @@ impl Class {
         let props = self.expand_props(&crate_name);
         let reexpand = self.reexpand();
         let exotic_const = if self.config().exotic {
-            quote! { const KIND: #crate_name::class::ClassKind = #crate_name::class::ClassKind::Exotic; }
+            let exotic_module = format_ident!("__impl_exotic_{}__", self.ident());
+            quote! {
+                const KIND: #crate_name::class::ClassKind = #crate_name::class::ClassKind::Exotic;
+                const EXOTIC_HOOKS: #crate_name::class::ExoticHooks = #exotic_module::ExoticImpl::HOOKS;
+            }
         } else {
             TokenStream::new()
         };
@@ -385,7 +389,7 @@ impl Class {
                     atom: #crate_name::Atom<'js>,
                     receiver: #crate_name::Value<'js>,
                     value: #crate_name::Value<'js>,
-                ) -> #crate_name::Result<bool> {
+                ) -> #crate_name::Result<#crate_name::class::ExoticSetResult> {
                     #exotic_module::ExoticImpl::exotic_set_property(this, ctx, atom, receiver, value)
                 }
 

@@ -36,6 +36,52 @@ pub enum ClassKind {
     Exotic,
 }
 
+/// Which QuickJS exotic callbacks a class installs. Callbacks that are absent
+/// leave property lookup and assignment to QuickJS's ordinary object behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct ExoticHooks {
+    /// Intercept all property reads, including inherited properties.
+    pub get: bool,
+    /// Intercept all property writes.
+    pub set: bool,
+    /// Intercept property deletion.
+    pub delete: bool,
+    /// Intercept membership tests, including inherited properties.
+    pub has: bool,
+    /// Provide computed own property descriptors.
+    pub get_own_property: bool,
+    /// Provide computed own property names.
+    pub get_own_property_names: bool,
+}
+
+impl ExoticHooks {
+    /// Preserve the behavior of manually implemented exotic classes.
+    pub const ALL: Self = Self {
+        get: true,
+        set: true,
+        delete: true,
+        has: true,
+        get_own_property: true,
+        get_own_property_names: true,
+    };
+}
+
+/// The outcome of an exotic property setter. `Fallthrough` leaves ordinary
+/// assignment, including prototype setters, to the JavaScript engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExoticSetResult {
+    /// The exotic setter processed the assignment and returned its success state.
+    Handled(bool),
+    /// The exotic setter did not handle this property.
+    Fallthrough,
+}
+
+impl From<bool> for ExoticSetResult {
+    fn from(value: bool) -> Self {
+        Self::Handled(value)
+    }
+}
+
 /// A JavaScript property descriptor returned from [`JsClass::exotic_get_own_property`].
 pub struct PropertyDescriptor<'js> {
     /// The property value (for data descriptors).
@@ -91,6 +137,10 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
     /// The kind of this class (plain, callable, or exotic).
     const KIND: ClassKind = ClassKind::Plain;
 
+    /// Callbacks installed for this exotic class. Derived classes set this to
+    /// the hooks declared in their `#[rquickjs::exotic]` implementation.
+    const EXOTIC_HOOKS: ExoticHooks = ExoticHooks::ALL;
+
     /// Can the type be mutated while a JavaScript value.
     ///
     /// This should either be [`Readable`] or [`Writable`].
@@ -129,9 +179,9 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         _atom: Atom<'js>,
         _receiver: Value<'js>,
         _value: Value<'js>,
-    ) -> Result<bool> {
+    ) -> Result<ExoticSetResult> {
         let _ = this;
-        Ok(false)
+        Ok(ExoticSetResult::Handled(false))
     }
 
     /// The function which will be called if a delete property is performed on an object with this class
@@ -458,7 +508,9 @@ unsafe fn class_id<'js, C: JsClass<'js>>(ctx: &Ctx<'js>) -> Result<qjs::JSClassI
     match C::KIND {
         ClassKind::Plain => Ok(ctx.get_opaque().get_class_id()),
         ClassKind::Callable => Ok(ctx.get_opaque().get_callable_id()),
-        ClassKind::Exotic => Ok(ctx.get_opaque().get_exotic_id()),
+        ClassKind::Exotic => ctx
+            .get_opaque()
+            .get_or_register_exotic::<C>(qjs::JS_GetRuntime(ctx.as_ptr())),
     }
 }
 
@@ -471,7 +523,7 @@ mod test {
     };
 
     use crate::{
-        class::{ClassKind, JsClass, Readable, Trace, Tracer, Writable},
+        class::{ClassKind, ExoticSetResult, JsClass, Readable, Trace, Tracer, Writable},
         function::This,
         test_with,
         value::Constructor,
@@ -999,7 +1051,7 @@ mod test {
                 atom: crate::Atom<'js>,
                 _receiver: crate::Value<'js>,
                 _value: crate::Value<'js>,
-            ) -> crate::Result<bool> {
+            ) -> crate::Result<ExoticSetResult> {
                 let _ = this;
                 if atom.to_string()? == "i" {
                     let Some(new_i) = _value.as_int() else {
@@ -1008,7 +1060,7 @@ mod test {
                         return Err(ctx.throw(err_val));
                     };
                     this.borrow_mut().i = new_i;
-                    return Ok(true);
+                    return Ok(ExoticSetResult::Handled(true));
                 }
                 let err_val =
                     crate::String::from_str(ctx.clone(), "Properties are read-only")?.into_value();
