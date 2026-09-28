@@ -60,7 +60,14 @@ struct WritableCollection {
 #[rquickjs::exotic]
 impl WritableCollection {
     #[qjs(set)]
-    fn set(&mut self, ctx: &Ctx<'_>, atom: Atom<'_>, value: Value<'_>) -> Result<ExoticSetResult> {
+    fn set<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        atom: Atom<'js>,
+        object: Value<'js>,
+        receiver: Value<'js>,
+        value: Value<'js>,
+    ) -> Result<ExoticSetResult> {
         if atom.to_string()? == "detached" {
             ctx.eval::<(), _>("Object.setPrototypeOf(target, Object.prototype)")?;
             Ok(ExoticSetResult::Fallthrough)
@@ -75,6 +82,9 @@ impl WritableCollection {
             )?;
             Ok(ExoticSetResult::Fallthrough)
         } else if atom.to_string()? == "0" {
+            if object != receiver {
+                return Ok(ExoticSetResult::Fallthrough);
+            }
             self.indexed = value.as_int().expect("integer test value");
             Ok(ExoticSetResult::Handled(true))
         } else {
@@ -131,6 +141,9 @@ fn indexed_setter_preserves_ordinary_assignment() -> Result<()> {
 
         assert!(ctx.eval::<bool, _>(
             "collection[0] = 42; collection.custom = { value: 7 }; collection[0] === 42 && collection.custom.value === 7"
+        )?);
+        assert!(ctx.eval::<bool, _>(
+            "const derived = Object.create(collection); derived[0] = 9; derived[0] === 9 && collection[0] === 42"
         )?);
         assert!(ctx.eval::<bool, _>(
             "globalThis.target = Object.create(collection); target.detached = { value: 3 }; target.detached.value === 3 && Object.getPrototypeOf(target) === Object.prototype"

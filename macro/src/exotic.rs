@@ -248,8 +248,14 @@ impl ExoticMethod {
                 (params, args, quote! { #crate_name::Value<'js> }, conversion)
             }
             ExoticMethodKind::Set => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, _receiver: #crate_name::Value<'js>, value: #crate_name::Value<'js> };
-                let args = if self.has_ctx {
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, object: #crate_name::Value<'js>, receiver: #crate_name::Value<'js>, value: #crate_name::Value<'js> };
+                let with_receiver =
+                    self.function.params.params.len() > if self.has_ctx { 4 } else { 3 };
+                let args = if with_receiver && self.has_ctx {
+                    quote! { ctx, atom, object, receiver, value }
+                } else if with_receiver {
+                    quote! { atom, object, receiver, value }
+                } else if self.has_ctx {
                     quote! { ctx, atom, value }
                 } else {
                     quote! { atom, value }
@@ -402,6 +408,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
+                _object: #crate_name::Value<'js>,
                 _receiver: #crate_name::Value<'js>,
                 _value: #crate_name::Value<'js>,
             ) -> #crate_name::Result<#crate_name::class::ExoticSetResult> {

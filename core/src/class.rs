@@ -177,6 +177,7 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
+        _object: Value<'js>,
         _receiver: Value<'js>,
         _value: Value<'js>,
     ) -> Result<ExoticSetResult> {
@@ -1049,6 +1050,7 @@ mod test {
                 this: &super::JsCell<'js, Self>,
                 ctx: &crate::Ctx<'js>,
                 atom: crate::Atom<'js>,
+                _object: crate::Value<'js>,
                 _receiver: crate::Value<'js>,
                 _value: crate::Value<'js>,
             ) -> crate::Result<ExoticSetResult> {

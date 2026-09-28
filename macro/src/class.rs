@@ -387,10 +387,11 @@ impl Class {
                     this: &#crate_name::class::JsCell<'js, Self>,
                     ctx: &#crate_name::Ctx<'js>,
                     atom: #crate_name::Atom<'js>,
+                    object: #crate_name::Value<'js>,
                     receiver: #crate_name::Value<'js>,
                     value: #crate_name::Value<'js>,
                 ) -> #crate_name::Result<#crate_name::class::ExoticSetResult> {
-                    #exotic_module::ExoticImpl::exotic_set_property(this, ctx, atom, receiver, value)
+                    #exotic_module::ExoticImpl::exotic_set_property(this, ctx, atom, object, receiver, value)
                 }
 
                 fn exotic_delete_property(

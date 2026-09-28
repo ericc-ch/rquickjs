@@ -297,7 +297,7 @@ impl VTable {
     unsafe fn set_property_impl<'js, C: JsClass<'js>>(
         this_ptr: NonNull<ClassCell<()>>,
         ctx: *mut qjs::JSContext,
-        _obj: qjs::JSValueConst,
+        obj: qjs::JSValueConst,
         atom: qjs::JSAtom,
         receiver: qjs::JSValueConst,
         value: qjs::JSValue,
@@ -306,11 +306,19 @@ impl VTable {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+        let object = Value::from_js_value_const(ctx.clone(), obj);
         let receiver = Value::from_js_value_const(ctx.clone(), receiver);
         let value = Value::from_js_value_const(ctx.clone(), value);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_set_property(&this_ptr.as_ref().data, &ctx, atom, receiver, value) {
+            match C::exotic_set_property(
+                &this_ptr.as_ref().data,
+                &ctx,
+                atom,
+                object,
+                receiver,
+                value,
+            ) {
                 Ok(ExoticSetResult::Handled(true)) => 1,
                 Ok(ExoticSetResult::Handled(false)) => 0,
                 // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
