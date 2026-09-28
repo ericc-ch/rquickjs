@@ -182,6 +182,9 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
         assert!(ctx.eval::<bool, _>(
             "Reflect.defineProperty(collection, 'during', { value: 8, configurable: true }) && Reflect.ownKeys(collection).filter(key => key === 'during').length === 1 && collection.during === 8"
         )?);
+        assert!(ctx.eval::<bool, _>(
+            "Reflect.defineProperty(collection, '2', { value: 5, configurable: true }) && Reflect.ownKeys(collection).filter(key => key === '2').length === 1"
+        )?);
         let object: Object = ctx.globals().get("collection")?;
         assert!(object.contains_own_key("during")?);
         assert!(!object.contains_own_key("item")?);
