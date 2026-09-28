@@ -1,7 +1,7 @@
 #![cfg(feature = "macro")]
 
 use rquickjs::{
-    class::{ExoticSetResult, PropertyDescriptor, Trace},
+    class::{ExoticSetResult, PropertyDescriptor, PropertyName, Trace},
     Atom, Class, Context, Ctx, IntoJs, JsLifetime, Result, Runtime, Value,
 };
 
@@ -20,6 +20,14 @@ impl Collection {
 
 #[rquickjs::exotic]
 impl Collection {
+    #[qjs(get_own_property_names)]
+    fn own_names<'js>(&self, ctx: &Ctx<'js>) -> Result<Vec<PropertyName<'js>>> {
+        Ok(vec![PropertyName {
+            atom: Atom::from_u32(ctx.clone(), 0)?,
+            is_enumerable: true,
+        }])
+    }
+
     #[qjs(get_own_property)]
     fn own_property<'js>(
         &self,
@@ -134,6 +142,9 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
 
         assert!(ctx.eval::<bool, _>(
             "collection[0] === 42 && collection.item() === 42 && 'item' in collection && '0' in collection"
+        )?);
+        assert!(ctx.eval::<bool, _>(
+            "collection.someProperty = 3; JSON.stringify(Object.getOwnPropertyNames(collection)) === '[\"0\",\"someProperty\"]'"
         )?);
         assert!(ctx.eval::<bool, _>("custom.custom === 7")?);
         Ok(())
