@@ -212,7 +212,9 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
     }
 
     /// Called when QuickJS creates an own property on an exotic object.
-    /// `is_data` is false when the descriptor has a getter or setter.
+    /// `is_data` is false for accessor descriptors and for generic descriptors
+    /// without value/writable; only data descriptors set it. Accessor and
+    /// generic cases must `Fallthrough` unless the hook handles them blind.
     fn exotic_define_own_property(
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,

@@ -109,7 +109,10 @@ pub(crate) unsafe extern "C" fn exotic_set_property(
 ) -> qjs::c_int {
     let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+    let Some(ptr) = NonNull::new(ptr) else {
+        return -1;
+    };
+    let ptr = ptr.cast::<ClassCell<()>>();
     (ptr.as_ref().v_table.set_property)(ptr, ctx, obj, atom, receiver, value, flags)
 }
 
@@ -148,7 +151,10 @@ pub(crate) unsafe extern "C" fn exotic_define_own_property(
 ) -> qjs::c_int {
     let id = qjs::JS_GetClassID(obj);
     let ptr = qjs::JS_GetOpaque(obj, id);
-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+    let Some(ptr) = NonNull::new(ptr) else {
+        return -1;
+    };
+    let ptr = ptr.cast::<ClassCell<()>>();
     let is_data = flags
         & (qjs::JS_PROP_HAS_VALUE as qjs::c_int | qjs::JS_PROP_HAS_WRITABLE as qjs::c_int)
         != 0;
@@ -348,9 +354,10 @@ impl VTable {
             ) {
                 Ok(ExoticSetResult::Handled(true)) => 1,
                 Ok(ExoticSetResult::Handled(false)) => 0,
-                // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
+                // Matches `JS_EXOTIC_FALLTHROUGH` in the QuickJS-NG fork
+                // (`sys/quickjs/quickjs.h`); pre-generated bindings lack it.
                 Ok(ExoticSetResult::Fallthrough) => 2,
-                // JS_EXOTIC_FALLTHROUGH_SKIP_OWN in our QuickJS-NG fork.
+                // Matches `JS_EXOTIC_FALLTHROUGH_SKIP_OWN` in the fork.
                 Ok(ExoticSetResult::FallthroughSkippingOwnProperty) => 3,
                 Err(e) => {
                     e.throw(&ctx);
@@ -432,7 +439,7 @@ impl VTable {
             {
                 Ok(ExoticDefineResult::Handled(true)) => 1,
                 Ok(ExoticDefineResult::Handled(false)) => 0,
-                // JS_EXOTIC_FALLTHROUGH in our QuickJS-NG fork.
+                // Matches `JS_EXOTIC_FALLTHROUGH` in the QuickJS-NG fork.
                 Ok(ExoticDefineResult::Fallthrough) => 2,
                 Err(error) => {
                     error.throw(&ctx);
