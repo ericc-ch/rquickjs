@@ -9,6 +9,9 @@
 
 use ::core::ptr;
 
+mod realm;
+pub use realm::*;
+
 /// Common error message for converting between C `size_t` and Rust `usize`;
 pub const SIZE_T_ERROR: &str =
     "conversion between C type 'size_t' and Rust type 'usize' overflowed.";

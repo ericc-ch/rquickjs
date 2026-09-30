@@ -10,12 +10,14 @@ use crate::{
 mod args;
 mod ffi;
 mod into_func;
+mod native;
 mod params;
 mod types;
 
 use alloc::{borrow::ToOwned as _, boxed::Box};
 pub use args::{Args, IntoArg, IntoArgs};
 pub use ffi::RustFunction;
+pub use native::NativeFunc;
 pub use params::{FromParam, FromParams, ParamRequirement, Params, ParamsAccessor};
 #[cfg(feature = "futures")]
 pub use types::Async;
