@@ -1,4 +1,5 @@
 use crate::{qjs, Ctx, Error, Result, StdString, Value};
+use alloc::vec::Vec;
 use core::{ffi::c_char, mem, ptr::NonNull, slice, str};
 
 /// Rust representation of a JavaScript string.
@@ -39,6 +40,41 @@ impl<'js> String<'js> {
             let js_val = ctx.handle_exception(js_val)?;
             String::from_js_value(ctx, js_val)
         })
+    }
+
+    /// Create a new JavaScript string from UTF-16 code units.
+    ///
+    /// Unpaired surrogates are preserved, unlike `from_str` which cannot
+    /// represent them.
+    pub fn from_utf16(ctx: Ctx<'js>, units: &[u16]) -> Result<Self> {
+        Ok(unsafe {
+            let js_val = qjs::JS_NewStringUTF16(ctx.as_ptr(), units.as_ptr(), units.len() as _);
+            let js_val = ctx.handle_exception(js_val)?;
+            String::from_js_value(ctx, js_val)
+        })
+    }
+
+    /// Convert the JavaScript string to its UTF-16 code units.
+    ///
+    /// Unpaired surrogates are preserved, unlike `to_string` which maps them
+    /// to CESU-8 and then fails to decode them as UTF-8.
+    pub fn to_utf16(&self) -> Result<Vec<u16>> {
+        let mut len = mem::MaybeUninit::uninit();
+        let ptr = unsafe {
+            qjs::JS_ToCStringLenUTF16(self.0.ctx.as_ptr(), len.as_mut_ptr(), self.0.as_js_value())
+        };
+        if ptr.is_null() {
+            // Might not ever happen but I am not 100% sure
+            // so just incase check it.
+            return Err(Error::Unknown);
+        }
+        let len = unsafe { len.assume_init() };
+        // SAFETY: `ptr` points to `len` units owned by this call. The copy
+        // below outlives the free.
+        let units: &[u16] = unsafe { slice::from_raw_parts(ptr, len as _) };
+        let result = units.to_vec();
+        unsafe { qjs::JS_FreeCStringUTF16(self.0.ctx.as_ptr(), ptr) };
+        Ok(result)
     }
 }
 
@@ -180,6 +216,34 @@ mod test {
             let func: Function = ctx.eval("x =>  x + 'bar'").unwrap();
             let text: StdString = (string,).apply(&func).unwrap();
             assert_eq!(text, "foobar".to_string());
+        });
+    }
+
+    #[test]
+    fn utf16_round_trip() {
+        test_with(|ctx| {
+            // 'hi' plus U+1F600 as a surrogate pair.
+            let units = [0x68, 0x69, 0xD83D, 0xDE00];
+            let string = String::from_utf16(ctx.clone(), &units).unwrap();
+            assert_eq!(string.to_utf16().unwrap(), units);
+        });
+    }
+
+    #[test]
+    fn utf16_lone_surrogate() {
+        test_with(|ctx| {
+            let string = String::from_utf16(ctx.clone(), &[0xD800]).unwrap();
+            assert_eq!(string.to_utf16().unwrap(), [0xD800]);
+            let from_js: String = ctx.eval("'\\uD800'").unwrap();
+            assert_eq!(from_js.to_utf16().unwrap(), [0xD800]);
+        });
+    }
+
+    #[test]
+    fn utf16_empty() {
+        test_with(|ctx| {
+            let string = String::from_utf16(ctx.clone(), &[]).unwrap();
+            assert!(string.to_utf16().unwrap().is_empty());
         });
     }
 
