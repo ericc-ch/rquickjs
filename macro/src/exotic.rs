@@ -282,11 +282,11 @@ impl ExoticMethod {
                 )
             }
             ExoticMethodKind::DefineOwnProperty => {
-                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, value: #crate_name::Value<'js>, is_data: bool };
+                let params = quote! { ctx: &#crate_name::Ctx<'js>, atom: #crate_name::Atom<'js>, descriptor: #crate_name::class::PropertyDefinition<'js> };
                 let args = if self.has_ctx {
-                    quote! { ctx, atom, value, is_data }
+                    quote! { ctx, atom, descriptor }
                 } else {
-                    quote! { atom, value, is_data }
+                    quote! { atom, descriptor }
                 };
                 let conversion = if self.returns_result {
                     quote! { result }
@@ -504,8 +504,7 @@ pub(crate) fn expand(item: ItemImpl) -> Result<TokenStream> {
                 this: &#crate_name::class::JsCell<'js, #self_ty>,
                 _ctx: &#crate_name::Ctx<'js>,
                 _atom: #crate_name::Atom<'js>,
-                _value: #crate_name::Value<'js>,
-                _is_data: bool,
+                _descriptor: #crate_name::class::PropertyDefinition<'js>,
             ) -> #crate_name::Result<#crate_name::class::ExoticDefineResult> {
                 let _ = this;
                 Ok(#crate_name::class::ExoticDefineResult::Fallthrough)

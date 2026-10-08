@@ -1,7 +1,10 @@
 #![cfg(feature = "macro")]
 
 use rquickjs::{
-    class::{ExoticDefineResult, ExoticSetResult, PropertyDescriptor, PropertyName, Trace},
+    class::{
+        ExoticDefineResult, ExoticSetResult, PropertyDefinition, PropertyDescriptor, PropertyName,
+        Trace,
+    },
     Atom, Class, Context, Ctx, IntoJs, JsLifetime, Object, Result, Runtime, Value,
 };
 
@@ -25,12 +28,11 @@ impl Collection {
         &self,
         ctx: &Ctx<'_>,
         atom: Atom<'_>,
-        _value: Value<'_>,
-        is_data: bool,
+        descriptor: PropertyDefinition<'_>,
     ) -> Result<ExoticDefineResult> {
         Ok(match atom.to_string()?.as_str() {
             "0" => ExoticDefineResult::Handled(false),
-            "indexed" => ExoticDefineResult::Handled(is_data),
+            "indexed" => ExoticDefineResult::Handled(descriptor.is_data_descriptor()),
             "during" => {
                 ctx.eval::<(), _>("if (!globalThis.defining) { globalThis.defining = true; Object.defineProperty(collection, 'during', { value: 4, configurable: true }); }")?;
                 ExoticDefineResult::Fallthrough
@@ -171,7 +173,7 @@ fn own_properties_do_not_hide_the_prototype_or_other_classes_hooks() -> Result<(
             "collection[0] === 42 && collection.item() === 42 && 'item' in collection && '0' in collection"
         )?);
         assert!(ctx.eval::<bool, _>(
-            "collection.someProperty = 3; JSON.stringify(Object.getOwnPropertyNames(collection)) === '[\"0\",\"2\",\"10\",\"someProperty\"]'"
+            "collection.someProperty = 3; JSON.stringify(Object.getOwnPropertyNames(collection)) === '[\"10\",\"2\",\"0\",\"someProperty\"]'"
         )?);
         assert!(ctx.eval::<bool, _>(
             "Reflect.defineProperty(collection, 'ordinary', { value: 9 }) && collection.ordinary === 9 && !Reflect.defineProperty(collection, '0', { value: 7 }) && collection[0] === 42"

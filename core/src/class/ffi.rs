@@ -145,8 +145,8 @@ pub(crate) unsafe extern "C" fn exotic_define_own_property(
     obj: qjs::JSValueConst,
     atom: qjs::JSAtom,
     value: qjs::JSValueConst,
-    _getter: qjs::JSValueConst,
-    _setter: qjs::JSValueConst,
+    getter: qjs::JSValueConst,
+    setter: qjs::JSValueConst,
     flags: qjs::c_int,
 ) -> qjs::c_int {
     let id = qjs::JS_GetClassID(obj);
@@ -155,10 +155,7 @@ pub(crate) unsafe extern "C" fn exotic_define_own_property(
         return -1;
     };
     let ptr = ptr.cast::<ClassCell<()>>();
-    let is_data = flags
-        & (qjs::JS_PROP_HAS_VALUE as qjs::c_int | qjs::JS_PROP_HAS_WRITABLE as qjs::c_int)
-        != 0;
-    (ptr.as_ref().v_table.define_own_property)(ptr, ctx, atom, value, is_data)
+    (ptr.as_ref().v_table.define_own_property)(ptr, ctx, atom, value, getter, setter, flags)
 }
 
 /// FFI exotic get_own_property function for classes with exotic behavior.
@@ -237,7 +234,9 @@ pub(crate) type DefineOwnPropertyFunc = unsafe fn(
     ctx: *mut qjs::JSContext,
     atom: qjs::JSAtom,
     value: qjs::JSValueConst,
-    is_data: bool,
+    getter: qjs::JSValueConst,
+    setter: qjs::JSValueConst,
+    flags: qjs::c_int,
 ) -> qjs::c_int;
 
 pub(crate) type GetOwnPropertyFunc = unsafe fn(
@@ -427,16 +426,18 @@ impl VTable {
         ctx: *mut qjs::JSContext,
         atom: qjs::JSAtom,
         value: qjs::JSValueConst,
-        is_data: bool,
+        getter: qjs::JSValueConst,
+        setter: qjs::JSValueConst,
+        flags: qjs::c_int,
     ) -> qjs::c_int {
         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
         let ctx = Ctx::from_ptr(ctx);
         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
-        let value = Value::from_js_value_const(ctx.clone(), value);
+        let descriptor =
+            super::PropertyDefinition::from_define_args(&ctx, value, getter, setter, flags);
 
         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
-            match C::exotic_define_own_property(&this_ptr.as_ref().data, &ctx, atom, value, is_data)
-            {
+            match C::exotic_define_own_property(&this_ptr.as_ref().data, &ctx, atom, descriptor) {
                 Ok(ExoticDefineResult::Handled(true)) => 1,
                 Ok(ExoticDefineResult::Handled(false)) => 0,
                 // Matches `JS_EXOTIC_FALLTHROUGH` in the QuickJS-NG fork.

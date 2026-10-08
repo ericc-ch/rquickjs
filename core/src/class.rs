@@ -77,8 +77,8 @@ pub enum ExoticSetResult {
     Handled(bool),
     /// The exotic setter did not handle this property.
     Fallthrough,
-    /// The exotic setter ignores this computed property when the receiver is
-    /// another object; continue searching at the holder's prototype.
+    /// Continue ordinary [[Set]] at this object's prototype, ignoring this
+    /// object's exotic own property for the key.
     FallthroughSkippingOwnProperty,
 }
 
@@ -132,6 +132,101 @@ impl<'js> PropertyDescriptor<'js> {
             enumerable,
             writable,
             is_getset: false,
+        }
+    }
+}
+
+/// A property descriptor passed to [`JsClass::exotic_define_own_property`].
+///
+/// Each field is `None` when the caller omitted it. A present field whose
+/// value is `undefined` is `Some`, which is distinct from omission. `value`
+/// and `writable` are data fields. `getter` and `setter` are accessor fields.
+/// `enumerable` and `configurable` apply to both kinds.
+///
+/// ```
+/// use rquickjs::class::PropertyDefinition;
+///
+/// fn writable_only<'js>() -> PropertyDefinition<'js> {
+///     PropertyDefinition {
+///         value: None,
+///         writable: Some(true),
+///         getter: None,
+///         setter: None,
+///         enumerable: None,
+///         configurable: None,
+///     }
+/// }
+///
+/// fn generic<'js>() -> PropertyDefinition<'js> {
+///     PropertyDefinition {
+///         value: None,
+///         writable: None,
+///         getter: None,
+///         setter: None,
+///         enumerable: Some(true),
+///         configurable: None,
+///     }
+/// }
+///
+/// assert!(writable_only().is_data_descriptor());
+/// assert!(generic().is_generic_descriptor());
+/// ```
+#[derive(Debug, Clone)]
+pub struct PropertyDefinition<'js> {
+    /// Present when the descriptor has `[[Value]]`.
+    pub value: Option<Value<'js>>,
+    /// Present when the descriptor has `[[Writable]]`.
+    pub writable: Option<bool>,
+    /// Present when the descriptor has `[[Get]]`.
+    pub getter: Option<Value<'js>>,
+    /// Present when the descriptor has `[[Set]]`.
+    pub setter: Option<Value<'js>>,
+    /// Present when the descriptor has `[[Enumerable]]`.
+    pub enumerable: Option<bool>,
+    /// Present when the descriptor has `[[Configurable]]`.
+    pub configurable: Option<bool>,
+}
+
+impl<'js> PropertyDefinition<'js> {
+    /// Reports whether this is a data descriptor.
+    ///
+    /// A data descriptor has `[[Value]]` or `[[Writable]]`.
+    pub fn is_data_descriptor(&self) -> bool {
+        self.value.is_some() || self.writable.is_some()
+    }
+
+    /// Reports whether this is an accessor descriptor.
+    ///
+    /// An accessor descriptor has `[[Get]]` or `[[Set]]`.
+    pub fn is_accessor_descriptor(&self) -> bool {
+        self.getter.is_some() || self.setter.is_some()
+    }
+
+    /// Reports whether this is a generic descriptor.
+    ///
+    /// A generic descriptor has neither data fields nor accessor fields.
+    pub fn is_generic_descriptor(&self) -> bool {
+        !self.is_data_descriptor() && !self.is_accessor_descriptor()
+    }
+
+    pub(crate) unsafe fn from_define_args(
+        ctx: &Ctx<'js>,
+        value: qjs::JSValueConst,
+        getter: qjs::JSValueConst,
+        setter: qjs::JSValueConst,
+        flags: qjs::c_int,
+    ) -> Self {
+        let present = |bit: u32| flags & (bit as qjs::c_int) != 0;
+        let dup = |raw| Value::from_js_value_const(ctx.clone(), raw);
+        Self {
+            value: present(qjs::JS_PROP_HAS_VALUE).then(|| dup(value)),
+            writable: present(qjs::JS_PROP_HAS_WRITABLE).then_some(present(qjs::JS_PROP_WRITABLE)),
+            getter: present(qjs::JS_PROP_HAS_GET).then(|| dup(getter)),
+            setter: present(qjs::JS_PROP_HAS_SET).then(|| dup(setter)),
+            enumerable: present(qjs::JS_PROP_HAS_ENUMERABLE)
+                .then_some(present(qjs::JS_PROP_ENUMERABLE)),
+            configurable: present(qjs::JS_PROP_HAS_CONFIGURABLE)
+                .then_some(present(qjs::JS_PROP_CONFIGURABLE)),
         }
     }
 }
@@ -211,16 +306,17 @@ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
         Ok(false)
     }
 
-    /// Called when QuickJS creates an own property on an exotic object.
-    /// `is_data` is false for accessor descriptors and for generic descriptors
-    /// without value/writable; only data descriptors set it. Accessor and
-    /// generic cases must `Fallthrough` unless the hook handles them blind.
+    /// Called when QuickJS defines an own property on an exotic object.
+    ///
+    /// `descriptor` is the descriptor the caller supplied, with omitted fields
+    /// as `None`. Return [`ExoticDefineResult::Handled`] when the hook accepts
+    /// or rejects the definition. Return [`ExoticDefineResult::Fallthrough`]
+    /// to continue with ordinary property definition using the same descriptor.
     fn exotic_define_own_property(
         this: &JsCell<'js, Self>,
         _ctx: &Ctx<'js>,
         _atom: Atom<'js>,
-        _value: Value<'js>,
-        _is_data: bool,
+        _descriptor: PropertyDefinition<'js>,
     ) -> Result<ExoticDefineResult> {
         let _ = this;
         Ok(ExoticDefineResult::Fallthrough)
