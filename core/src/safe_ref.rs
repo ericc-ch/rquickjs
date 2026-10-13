@@ -37,7 +37,12 @@ impl<T: ?Sized> Mut<T> {
 
         #[cfg(feature = "parallel")]
         {
-            self.0.lock().unwrap()
+            // A panic caught across the FFI boundary must not poison the
+            // runtime for later calls: the stored panic is resumed by the
+            // caller, and the protected data stays consistent.
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
         }
     }
 
@@ -49,7 +54,11 @@ impl<T: ?Sized> Mut<T> {
 
         #[cfg(feature = "parallel")]
         {
-            self.0.try_lock().ok()
+            match self.0.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+            }
         }
     }
 }

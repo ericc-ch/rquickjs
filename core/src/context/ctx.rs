@@ -462,7 +462,7 @@ impl<'js> Ctx<'js> {
     pub fn script_or_module_name(&self, stack_level: isize) -> Option<Atom<'js>> {
         let stack_level = core::ffi::c_int::try_from(stack_level).unwrap();
         let atom = unsafe { qjs::JS_GetScriptOrModuleName(self.as_ptr(), stack_level) };
-        if u64::from(qjs::__JS_ATOM_NULL) == u64::from(atom) {
+        if qjs::__JS_ATOM_NULL as u64 == atom as u64 {
             unsafe { qjs::JS_FreeAtom(self.as_ptr(), atom) };
             return None;
         }

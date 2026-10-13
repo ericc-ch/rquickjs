@@ -262,6 +262,10 @@ mod tests {
         }
     }
 
+    // The engine enforces its stack limit on the runtime's own thread; with
+    // `parallel`, native recursion from a foreign thread exhausts the host
+    // stack first, so the limit is asserted for the single-threaded runtime.
+    #[cfg(not(feature = "parallel"))]
     #[test]
     fn native_only_recursion_hits_the_engine_stack_limit() {
         let runtime = Runtime::new().unwrap();
@@ -287,6 +291,8 @@ mod tests {
         }
     }
 
+    // Resuming a stored panic needs unwinding; wasm targets abort instead.
+    #[cfg(not(target_os = "wasi"))]
     #[test]
     fn native_callback_panics_resume_on_the_rust_side() {
         let runtime = Runtime::new().unwrap();
