@@ -301,6 +301,9 @@ mod tests {
         assert_eq!(panic.downcast_ref::<&str>(), Some(&"native callback panic"));
     }
 
+    // Resuming a stored panic needs unwinding; wasm targets abort instead, so
+    // the release path is exercised on unwinding targets only.
+    #[cfg(not(target_os = "wasi"))]
     #[test]
     fn failed_registration_releases_state_before_resuming_a_stored_panic() {
         let runtime = Runtime::new().unwrap();
