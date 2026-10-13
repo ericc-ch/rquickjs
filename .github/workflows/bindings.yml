@@ -12,7 +12,7 @@ on:
       - master
     paths:
       - 'sys/quickjs'
-      - 'sys/wrapper.h'
+      - 'sys/quickjs.bind.h'
       - 'sys/build.rs'
       - 'sys/Cargo.toml'
       - '.github/workflows/bindings.yml'
@@ -62,7 +62,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
           target: ${{ matrix.target }}
-          components: rust-src
+          components: rust-src, rustfmt
 
       - name: Set up zig
         if: matrix.builder == 'zigbuild'
@@ -107,6 +107,7 @@ jobs:
           else
             cargo build --manifest-path sys/Cargo.toml --target ${{ matrix.target }} --features bindgen,update-bindings,logging
           fi
+          rustfmt --edition 2021 "sys/src/bindings/${{ matrix.target }}.rs"
           sed -n '1,20p' "sys/src/bindings/${{ matrix.target }}.rs"
 
       - name: Upload bindings

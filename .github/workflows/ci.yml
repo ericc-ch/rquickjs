@@ -412,3 +412,13 @@ jobs:
           else
             cargo test ${{ matrix.optimization && '--release' || '' }} --all --target ${{ matrix.target }} --no-default-features --features ${{ matrix.features }}
           fi
+
+  atom-table:
+    name: Atom table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - name: Check bundled atoms against quickjs-atom.h
+        run: python3 scripts/check-atom-table.py

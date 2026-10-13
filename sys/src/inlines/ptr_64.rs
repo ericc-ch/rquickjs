@@ -14,6 +14,11 @@ pub unsafe fn JS_VALUE_GET_INT(v: JSValue) -> i32 {
 }
 
 #[inline]
+pub unsafe fn JS_VALUE_GET_SHORT_BIG_INT(v: JSValue) -> i32 {
+    v.u.uint64 as i32
+}
+
+#[inline]
 pub unsafe fn JS_VALUE_GET_BOOL(v: JSValue) -> bool {
     v.u.uint64 != 0
 }
