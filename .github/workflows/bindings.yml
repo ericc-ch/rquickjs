@@ -107,7 +107,7 @@ jobs:
           else
             cargo build --manifest-path sys/Cargo.toml --target ${{ matrix.target }} --features bindgen,update-bindings,logging
           fi
-          cat "sys/src/bindings/${{ matrix.target }}.rs" | head -n 20
+          sed -n '1,20p' "sys/src/bindings/${{ matrix.target }}.rs"
 
       - name: Upload bindings
         uses: actions/upload-artifact@v7
