@@ -850,11 +850,11 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn JS_ThrowPlainError(ctx: *mut JSContext, fmt: *const ::core::ffi::c_char, ...)
-    -> JSValue;
+        -> JSValue;
 }
 unsafe extern "C" {
     pub fn JS_ThrowRangeError(ctx: *mut JSContext, fmt: *const ::core::ffi::c_char, ...)
-    -> JSValue;
+        -> JSValue;
 }
 unsafe extern "C" {
     pub fn JS_ThrowReferenceError(
