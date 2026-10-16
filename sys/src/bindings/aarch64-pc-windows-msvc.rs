@@ -1558,6 +1558,21 @@ unsafe extern "C" {
         opaque: *mut ::core::ffi::c_void,
     );
 }
+pub type JSCanCompileStringsHandler = ::core::option::Option<
+    unsafe extern "C" fn(
+        ctx: *mut JSContext,
+        input: *const ::core::ffi::c_char,
+        input_len: size_t,
+        opaque: *mut ::core::ffi::c_void,
+    ) -> ::core::ffi::c_int,
+>;
+unsafe extern "C" {
+    pub fn JS_SetCanCompileStringsHandler(
+        rt: *mut JSRuntime,
+        cb: JSCanCompileStringsHandler,
+        opaque: *mut ::core::ffi::c_void,
+    );
+}
 pub type JSInterruptHandler = ::core::option::Option<
     unsafe extern "C" fn(
         ctx: *mut JSContext,

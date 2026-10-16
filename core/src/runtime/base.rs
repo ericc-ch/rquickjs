@@ -1,7 +1,8 @@
 //! QuickJS runtime related types.
 
 use super::{
-    opaque::Opaque, raw::RawRuntime, InterruptHandler, MemoryUsage, PromiseHook, RejectionTracker,
+    opaque::Opaque, raw::RawRuntime, CanCompileStrings, InterruptHandler, MemoryUsage, PromiseHook,
+    RejectionTracker,
 };
 use crate::allocator::Allocator;
 #[cfg(feature = "loader")]
@@ -124,6 +125,16 @@ impl Runtime {
     pub fn set_interrupt_handler(&self, handler: Option<InterruptHandler>) {
         unsafe {
             self.inner.lock().set_interrupt_handler(handler);
+        }
+    }
+
+    /// Set a closure called before the engine compiles a string from JavaScript
+    /// into code (`eval`, the `Function` constructor). The closure may refuse
+    /// by raising a JS exception and returning `false`.
+    #[inline]
+    pub fn set_can_compile_strings(&self, handler: Option<CanCompileStrings>) {
+        unsafe {
+            self.inner.lock().set_can_compile_strings(handler);
         }
     }
 

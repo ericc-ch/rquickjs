@@ -6,7 +6,8 @@ use crate::{
 use super::{
     exotic::ExoticMethodsHolder,
     userdata::{UserDataGuard, UserDataMap},
-    InterruptHandler, PromiseHook, PromiseHookType, RejectionTracker, UserDataError,
+    CanCompileStrings, InterruptHandler, PromiseHook, PromiseHookType, RejectionTracker,
+    UserDataError,
 };
 use alloc::boxed::Box;
 use core::{
@@ -45,6 +46,9 @@ pub(crate) struct Opaque<'js> {
     /// The user provided interrupt handler, if any.
     interrupt_handler: UnsafeCell<Option<InterruptHandler>>,
 
+    /// The user provided string compilation handler, if any.
+    can_compile_strings: UnsafeCell<Option<CanCompileStrings>>,
+
     /// The class id for rust classes.
     class_id: qjs::JSClassID,
     /// The class id for rust classes which can be called.
@@ -76,6 +80,8 @@ impl<'js> Opaque<'js> {
             rejection_tracker: UnsafeCell::new(None),
 
             interrupt_handler: UnsafeCell::new(None),
+
+            can_compile_strings: UnsafeCell::new(None),
 
             class_id: qjs::JS_INVALID_CLASS_ID,
             callable_class_id: qjs::JS_INVALID_CLASS_ID,
@@ -226,6 +232,14 @@ impl<'js> Opaque<'js> {
         unsafe { (*self.interrupt_handler.get()).as_mut().unwrap()() }
     }
 
+    pub fn set_can_compile_strings(&self, handler: Option<CanCompileStrings>) {
+        unsafe { (*self.can_compile_strings.get()) = handler }
+    }
+
+    pub fn run_can_compile_strings<'a>(&self, ctx: Ctx<'a>, source: &str) -> bool {
+        unsafe { (*self.can_compile_strings.get()).as_mut().unwrap()(ctx, source) }
+    }
+
     #[allow(dead_code)] // not used in no_std
     pub fn set_panic(&self, panic: Box<dyn Any + Send + 'static>) {
         self.panic.set(Some(panic))
@@ -305,6 +319,7 @@ impl<'js> Opaque<'js> {
     pub fn clear(&mut self) {
         self.rejection_tracker.get_mut().take();
         self.interrupt_handler.get_mut().take();
+        self.can_compile_strings.get_mut().take();
         self.panic.take();
         self.prototypes.get_mut().clear();
         #[cfg(feature = "futures")]

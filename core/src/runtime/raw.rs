@@ -14,7 +14,10 @@ use crate::{
     Ctx, Error, Result, Value,
 };
 
-use super::{opaque::Opaque, InterruptHandler, PromiseHook, PromiseHookType, RejectionTracker};
+use super::{
+    opaque::Opaque, CanCompileStrings, InterruptHandler, PromiseHook, PromiseHookType,
+    RejectionTracker,
+};
 
 const DUMP_BYTECODE_FINAL: u64 = 0x01;
 const DUMP_BYTECODE_PASS2: u64 = 0x02;
@@ -466,6 +469,53 @@ impl RawRuntime {
         self.get_opaque().set_interrupt_handler(handler);
     }
 
+    /// Set a closure which is called before the engine compiles a string from
+    /// JavaScript into code: `eval` (direct and indirect) and the `Function`
+    /// constructor. Returning `true` allows compilation. Returning `false`
+    /// refuses it and the closure is expected to have raised a JS exception;
+    /// the engine propagates it instead of running the string.
+    pub unsafe fn set_can_compile_strings(&mut self, handler: Option<CanCompileStrings>) {
+        unsafe extern "C" fn can_compile_strings_trampoline(
+            ctx: *mut qjs::JSContext,
+            input: *const ::core::ffi::c_char,
+            input_len: size_t,
+            opaque: *mut ::core::ffi::c_void,
+        ) -> ::core::ffi::c_int {
+            // This should be safe as the value is set below to a non-null pointer.
+            let opaque = NonNull::new_unchecked(opaque).cast::<Opaque>();
+
+            let allowed = {
+                let catch_unwind = crate::util::catch_unwind(AssertUnwindSafe(move || {
+                    let ctx = Ctx::from_ptr(ctx);
+                    let bytes =
+                        ::core::slice::from_raw_parts(input.cast::<u8>(), input_len as usize);
+                    let source = alloc::string::String::from_utf8_lossy(bytes);
+                    opaque.as_ref().run_can_compile_strings(ctx, &source)
+                }));
+                match catch_unwind {
+                    Ok(allowed) => allowed,
+                    Err(panic) => {
+                        // The stored panic surfaces through `handle_exception`
+                        // when the refusal propagates out of the engine.
+                        opaque.as_ref().set_panic(panic);
+                        false
+                    }
+                }
+            };
+
+            allowed as _
+        }
+
+        qjs::JS_SetCanCompileStringsHandler(
+            self.rt.as_ptr(),
+            handler
+                .as_ref()
+                .map(|_| can_compile_strings_trampoline as _),
+            qjs::JS_GetRuntimeOpaque(self.rt.as_ptr()),
+        );
+        self.get_opaque().set_can_compile_strings(handler);
+    }
+
     fn add_dump_flags(rt: *mut rquickjs_sys::JSRuntime) {
         unsafe {
             qjs::JS_SetDumpFlags(rt, build_dump_flags());
@@ -477,7 +527,35 @@ impl RawRuntime {
 mod test {
     use std::sync::{Arc, Mutex};
 
-    use crate::{Context, Runtime};
+    use crate::{Context, Exception, Runtime};
+
+    /// The string compilation handler gates `eval` and `Function` but not the
+    /// engine's own `JS_Eval` entry point, which the host uses to run scripts.
+    #[test]
+    fn can_compile_strings_handler() {
+        let rt = Runtime::new().unwrap();
+        rt.set_can_compile_strings(Some(Box::new(|ctx, source| {
+            if source.contains("blocked") {
+                let _ = Exception::throw_message(&ctx, "refused");
+                false
+            } else {
+                true
+            }
+        })));
+        let context = Context::full(&rt).unwrap();
+        context.with(|ctx| {
+            // `eval` and `Function` are both gated.
+            let value: i32 = ctx.eval("eval('40 + 2')").unwrap();
+            assert_eq!(value, 42);
+            let value: i32 = ctx.eval("Function('return 40 + 2')()").unwrap();
+            assert_eq!(value, 42);
+            assert!(ctx.eval::<(), _>("eval('blocked')").is_err());
+            assert!(ctx.eval::<(), _>("Function('blocked')()").is_err());
+            // The host's own evaluation path is not a JS string compilation.
+            let value: String = ctx.eval("'blocked'").unwrap();
+            assert_eq!(value, "blocked");
+        });
+    }
 
     #[test]
     fn promise_rejection_handler() {

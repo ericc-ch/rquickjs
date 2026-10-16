@@ -14,7 +14,7 @@ use async_lock::Mutex;
 
 use super::{
     opaque::Opaque, raw::RawRuntime, schedular::SchedularPoll, spawner::DriveFuture,
-    InterruptHandler, MemoryUsage, PromiseHook, RejectionTracker,
+    CanCompileStrings, InterruptHandler, MemoryUsage, PromiseHook, RejectionTracker,
 };
 use crate::allocator::Allocator;
 #[cfg(feature = "loader")]
@@ -177,6 +177,20 @@ impl AsyncRuntime {
                 .await
                 .runtime
                 .set_interrupt_handler(handler);
+        }
+    }
+
+    /// Set a closure called before the engine compiles a string from JavaScript
+    /// into code (`eval`, the `Function` constructor). The closure may refuse
+    /// by raising a JS exception and returning `false`.
+    #[inline]
+    pub async fn set_can_compile_strings(&self, handler: Option<CanCompileStrings>) {
+        unsafe {
+            self.inner
+                .lock()
+                .await
+                .runtime
+                .set_can_compile_strings(handler);
         }
     }
 

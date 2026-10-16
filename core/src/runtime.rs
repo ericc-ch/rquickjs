@@ -51,5 +51,12 @@ pub type InterruptHandler = Box<dyn FnMut() -> bool + 'static>;
 #[cfg(feature = "parallel")]
 pub type InterruptHandler = Box<dyn FnMut() -> bool + Send + 'static>;
 
+/// The type of the string compilation handler.
+#[cfg(not(feature = "parallel"))]
+pub type CanCompileStrings = Box<dyn for<'a> Fn(Ctx<'a>, &str) -> bool + 'static>;
+/// The type of the string compilation handler.
+#[cfg(feature = "parallel")]
+pub type CanCompileStrings = Box<dyn for<'a> Fn(Ctx<'a>, &str) -> bool + Send + 'static>;
+
 /// A struct with information about the runtimes memory usage.
 pub type MemoryUsage = crate::qjs::JSMemoryUsage;
