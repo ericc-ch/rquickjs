@@ -325,6 +325,24 @@ impl<'js, T> TypedArray<'js, T> {
             Self::get_raw(&self.0).unwrap_or_else(|| panic!("{}", T::CLASS_NAME.to_str()));
         slice::from_raw_parts(ptr.as_ptr().cast(), len)
     }
+
+    /// Copies the underlying elements into a new [`Vec`].
+    ///
+    /// Unlike [`as_slice`](Self::as_slice), the copy owns its memory, so it
+    /// stays valid after JavaScript runs, detaches the buffer, or resizes it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the array is detached or the class does not match `T`.
+    #[must_use]
+    pub fn to_vec(&self) -> Vec<T>
+    where
+        T: TypedArrayItem,
+    {
+        // SAFETY: the copy completes before any JavaScript can run, and the
+        // returned `Vec` holds no pointer into engine memory.
+        unsafe { self.as_slice() }.to_vec()
+    }
 }
 
 impl<'js, T> Deref for TypedArray<'js, T> {
@@ -503,6 +521,19 @@ mod test {
 
             assert_eq!(unsafe { val.as_bytes() }.unwrap(), &res)
         });
+    }
+
+    #[test]
+    fn to_vec_copies_out_of_engine_memory() {
+        test_with(|ctx| {
+            let val: TypedArray<u8> = ctx.eval("new Uint8Array([1, 2, 3])").unwrap();
+            let copy = val.to_vec();
+            // The copy is independent: writing through the JS object changes
+            // the array but not the vector.
+            val.as_object().set("0", 9u8).unwrap();
+            assert_eq!(unsafe { val.as_slice() }, &[9, 2, 3]);
+            assert_eq!(copy, vec![1, 2, 3]);
+        })
     }
 
     #[test]
