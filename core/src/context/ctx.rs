@@ -469,6 +469,38 @@ impl<'js> Ctx<'js> {
         unsafe { Some(Atom::from_atom_val(self.clone(), atom)) }
     }
 
+    /// Where the frame `stack_level` levels above the innermost one is
+    /// executing: its script as a [`StackFrame::filename`], plus 1-based line
+    /// and column.
+    ///
+    /// Called from a C function (a host binding), level 0 is the innermost
+    /// script frame — the script that called it, at the call site. The read goes
+    /// straight to the interpreter's stack frames, so it is unaffected by the
+    /// page's `Error.stackTraceLimit` and `Error.prepareStackTrace`, and it calls
+    /// no JS. A frame that runs no bytecode is reported with `native` set and no
+    /// position. Returns `None` when there is no such frame.
+    pub fn stack_frame(&self, stack_level: isize) -> Option<StackFrame<'js>> {
+        let stack_level = core::ffi::c_int::try_from(stack_level).ok()?;
+        let mut location = qjs::JSStackFrameLocation {
+            filename: qjs::__JS_ATOM_NULL,
+            line_num: -1,
+            col_num: -1,
+            native: 1,
+        };
+        // SAFETY: `location` is a valid, uniquely borrowed out-parameter for
+        // the duration of the call, and the context is alive.
+        if unsafe { qjs::JS_GetStackFrameLocation(self.as_ptr(), stack_level, &mut location) } == 0
+        {
+            return None;
+        }
+        Some(StackFrame {
+            filename: position_atom(self, location.filename),
+            line: position(location.line_num),
+            column: position(location.col_num),
+            native: location.native != 0,
+        })
+    }
+
     /// Runs the quickjs garbage collector for a cycle.
     ///
     /// Quickjs uses reference counting with a collection cycle for cyclic references.
@@ -520,9 +552,99 @@ impl<'js> Ctx<'js> {
     }
 }
 
+/// One frame of the running JS stack, as [`Ctx::stack_frame`] reports it.
+pub struct StackFrame<'js> {
+    /// The script the frame is executing, or `None` when it has no name.
+    pub filename: Option<Atom<'js>>,
+    /// 1-based, or 0 when the position is unknown.
+    pub line: u32,
+    /// 1-based, or 0 when the position is unknown.
+    pub column: u32,
+    /// Whether the frame is a C function, which runs no bytecode.
+    pub native: bool,
+}
+
+/// Takes ownership of a frame's filename atom, treating `JS_ATOM_NULL` as no
+/// name.
+fn position_atom<'js>(ctx: &Ctx<'js>, atom: qjs::JSAtom) -> Option<Atom<'js>> {
+    if atom == qjs::__JS_ATOM_NULL {
+        return None;
+    }
+    // SAFETY: the atom was duplicated for the caller by the C side and is
+    // owned here; `Atom` frees it exactly once.
+    Some(unsafe { Atom::from_atom_val(ctx.clone(), atom) })
+}
+
+/// A 1-based position from the C side, where a negative value means unknown.
+fn position(value: core::ffi::c_int) -> u32 {
+    u32::try_from(value).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod test {
     use crate::{CatchResultExt, JsLifetime};
+
+    #[test]
+    fn stack_frames_report_the_running_script() {
+        use crate::{Context, Function, Runtime};
+
+        let runtime = Runtime::new().unwrap();
+        let ctx = Context::full(&runtime).unwrap();
+        ctx.with(|ctx| {
+            // Every field of every frame the caller asks for, as text.
+            let read = Function::new(ctx.clone(), |ctx: crate::Ctx<'_>, level: usize| {
+                let level = isize::try_from(level).unwrap();
+                match ctx.stack_frame(level) {
+                    None => String::from("none"),
+                    Some(frame) => {
+                        let name = frame
+                            .filename
+                            .as_ref()
+                            .and_then(|atom| atom.to_string().ok())
+                            .unwrap_or_default();
+                        format!("{name}|{}|{}|{}", frame.line, frame.column, frame.native)
+                    }
+                }
+            })
+            .unwrap();
+            ctx.globals().set("__readFrame", read).unwrap();
+            // The page's own stack settings must not reach the read
+            // (<https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-violation>).
+            ctx.eval::<(), _>(
+                "Error.prepareStackTrace = () => '    at x (https://evil.test/spoof.js:42:7)';\n\
+                 Error.stackTraceLimit = 0;",
+            )
+            .unwrap();
+
+            let mut options = crate::context::EvalOptions::default();
+            options.filename = Some(String::from("https://page.test/a.js"));
+            let frames: Vec<String> = ctx
+                .eval_with_options(
+                    "(function page() {\n  return [__readFrame(0), __readFrame(1), __readFrame(2)];\n})()",
+                    options,
+                )
+                .unwrap();
+            // Called from a C function, level zero is the innermost script: the
+            // function that called it, at the line the call is on. Neither
+            // setting above changes it: no `prepareStackTrace` call and no
+            // `stackTraceLimit` truncation can reach this read.
+            assert_eq!(fields(&frames[0])[0], "https://page.test/a.js");
+            assert_eq!(fields(&frames[0])[1], "2");
+            assert!(fields(&frames[0])[2].parse::<u32>().unwrap() > 0, "{frames:?}");
+            assert_eq!(fields(&frames[0])[3], "false");
+            // Its caller is the top-level script, which is frame one.
+            assert_eq!(fields(&frames[1])[0], "https://page.test/a.js");
+            assert_eq!(fields(&frames[1])[1], "3");
+            // Nothing runs above the top-level script.
+            assert_eq!(frames[2], "none");
+        });
+    }
+
+    /// The four fields [`stack_frames_report_the_running_script`] reads, split
+    /// apart.
+    fn fields(frame: &str) -> Vec<&str> {
+        frame.split('|').collect()
+    }
 
     #[test]
     fn exports() {
