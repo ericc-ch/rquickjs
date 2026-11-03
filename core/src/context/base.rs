@@ -85,9 +85,22 @@ impl Context {
     /// If precise control is required of which functions are available use
     /// [`Context::custom`] or [`Context::builder`].
     pub fn full(runtime: &Runtime) -> Result<Self> {
-        let guard = runtime.inner.lock();
-        let ctx = NonNull::new(unsafe { qjs::JS_NewContext(guard.rt.as_ptr()) })
-            .ok_or(Error::Allocation)?;
+        // A live `Ctx` already holds the runtime lock on this thread, and the
+        // engine itself allows `JS_NewContext` while a context is running.
+        // Try the lock first; when it is unavailable on a single-threaded
+        // runtime the caller's guard keeps the runtime exclusive, so the
+        // context can be created through the raw runtime pointer. The
+        // parallel runtime has no reentrant owner, so it keeps blocking on
+        // the lock.
+        #[cfg(not(feature = "parallel"))]
+        let guard = runtime.inner.try_lock();
+        #[cfg(feature = "parallel")]
+        let guard = Some(runtime.inner.lock());
+        let raw = match &guard {
+            Some(guard) => guard.rt.as_ptr(),
+            None => runtime.raw_runtime().as_ptr(),
+        };
+        let ctx = NonNull::new(unsafe { qjs::JS_NewContext(raw) }).ok_or(Error::Allocation)?;
         let res = unsafe { ContextOwner::new(ctx, runtime.clone()) };
         // Explicitly drop the guard to ensure it is valid during the entire use of runtime
         mem::drop(guard);
@@ -122,8 +135,16 @@ impl Context {
     where
         F: FnOnce(Ctx) -> R,
     {
-        let guard = self.0.rt().inner.lock();
-        guard.update_stack_top();
+        // A live `Ctx` on this thread already holds the runtime lock. Entering
+        // another context on the same runtime is legal in the engine, so the
+        // nested call uses the caller's lock instead of taking it again.
+        #[cfg(not(feature = "parallel"))]
+        let guard = self.0.rt().inner.try_lock();
+        #[cfg(feature = "parallel")]
+        let guard = Some(self.0.rt().inner.lock());
+        if let Some(guard) = &guard {
+            guard.update_stack_top();
+        }
         let ctx = unsafe { Ctx::new(self) };
         f(ctx)
     }
@@ -174,6 +195,39 @@ mod test {
     fn base() {
         let rt = Runtime::new().unwrap();
         let _ = Context::base(&rt).unwrap();
+    }
+
+    /// A live `Ctx` holds the runtime lock on this thread. Creating another
+    /// realm and entering a second context must reuse that lock, because the
+    /// engine itself allows `JS_NewContext` while a context is running.
+    #[cfg(not(feature = "parallel"))]
+    #[test]
+    fn nested_context_under_a_live_ctx() {
+        let runtime = Runtime::new().unwrap();
+        let outer = Context::full(&runtime).unwrap();
+        outer.with(|ctx| {
+            let value: i32 = ctx.eval(r#"1 + 1"#).unwrap();
+            assert_eq!(value, 2);
+
+            let inner = Context::full(&runtime).unwrap();
+            inner.with(|inner_ctx| {
+                let value: i32 = inner_ctx.eval(r#"2 + 2"#).unwrap();
+                assert_eq!(value, 4);
+            });
+            drop(inner);
+
+            // Still live underneath, so entering another context must take the
+            // same reentrant path.
+            let other = Context::full(&runtime).unwrap();
+            other.with(|other_ctx| {
+                let value: i32 = other_ctx.eval(r#"3 + 3"#).unwrap();
+                assert_eq!(value, 6);
+            });
+            drop(other);
+
+            let after: i32 = ctx.eval(r#"4 + 4"#).unwrap();
+            assert_eq!(after, 8);
+        });
     }
 
     #[test]

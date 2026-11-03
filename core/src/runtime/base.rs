@@ -19,6 +19,10 @@ use std::sync::mpsc::{self, Sender};
 #[derive(Clone)]
 pub struct WeakRuntime {
     inner: Weak<Mut<RawRuntime>>,
+    /// The raw runtime pointer, kept alongside the lock-protected value so a
+    /// nested context can be created while the current thread already holds
+    /// the runtime lock.
+    raw: usize,
     #[cfg(feature = "parallel")]
     pending_free: Sender<NonNull<qjs::JSContext>>,
 }
@@ -27,6 +31,7 @@ impl WeakRuntime {
     pub fn try_ref(&self) -> Option<Runtime> {
         self.inner.upgrade().map(|inner| Runtime {
             inner,
+            raw: self.raw,
             #[cfg(feature = "parallel")]
             pending_free: self.pending_free.clone(),
         })
@@ -37,6 +42,10 @@ impl WeakRuntime {
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) inner: Ref<Mut<RawRuntime>>,
+    /// The raw runtime pointer, copied at construction. `Runtime` keeps it as
+    /// a `usize` so the struct stays `Send + Sync` under the `parallel`
+    /// feature; [`Runtime::raw_runtime`] casts it back.
+    raw: usize,
     #[cfg(feature = "parallel")]
     pub(crate) pending_free: Sender<NonNull<qjs::JSContext>>,
 }
@@ -59,8 +68,10 @@ impl Runtime {
                 pending_free_recv,
             )?
         };
+        let raw = rt.rt.as_ptr() as usize;
         Ok(Self {
             inner: Ref::new(Mut::new(rt)),
+            raw,
             #[cfg(feature = "parallel")]
             pending_free,
         })
@@ -84,17 +95,33 @@ impl Runtime {
                 pending_free_recv,
             )?
         };
+        let raw = rt.rt.as_ptr() as usize;
         Ok(Self {
             inner: Ref::new(Mut::new(rt)),
+            raw,
             #[cfg(feature = "parallel")]
             pending_free,
         })
+    }
+
+    /// The raw runtime pointer, valid for as long as this handle is alive.
+    ///
+    /// Used when the current thread already holds the runtime lock (a live
+    /// [`Ctx`](crate::Ctx)) and a nested context must be created without
+    /// taking the lock again. The lock guard the caller holds keeps the
+    /// runtime alive and exclusive.
+    pub(crate) fn raw_runtime(&self) -> NonNull<qjs::JSRuntime> {
+        // SAFETY: `raw` was captured from the live `RawRuntime::rt` when this
+        // runtime was constructed, and the runtime owns that pointer for as
+        // long as `self` exists.
+        unsafe { NonNull::new_unchecked(self.raw as *mut qjs::JSRuntime) }
     }
 
     /// Get weak ref to runtime
     pub fn weak(&self) -> WeakRuntime {
         WeakRuntime {
             inner: Ref::downgrade(&self.inner),
+            raw: self.raw,
             #[cfg(feature = "parallel")]
             pending_free: self.pending_free.clone(),
         }
